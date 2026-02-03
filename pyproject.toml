@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=58.0.0", "wheel", "setuptools_scm[toml]>=6.3.0"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "qlawcol"
+version = "0.1.0"
+description = "Q-law Collocation"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = ["numpy", "matplotlib", "scipy"]
+
+
+[tool.setuptools.packages.find]
+where = ["qlawcol"]
