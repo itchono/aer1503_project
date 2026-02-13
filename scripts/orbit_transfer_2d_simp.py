@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Circle
-from qlawcol.collocation import trapezoidal_collocation, trapezoidal_interpolant
+from qlawcol.collocation import hs_collocation, hs_interpolant
 from qlawcol.collocation.initial_guess import linear_sma_guess
 from qlawcol.dynamics.conversion import mee_to_cartesian
 from qlawcol.dynamics.gve import gve_2d_mee
@@ -62,13 +62,14 @@ problem_args = (
     T,
 )
 
-x_opt, u_opt, res = trapezoidal_collocation(problem_args, maxiter=500)
+x_opt, u_opt, res = hs_collocation(problem_args, maxiter=500, ftol=1e-9)
 
 # interpolate state
-interpolant = trapezoidal_interpolant(x_opt, u_opt, T, f)
-t_interp = np.linspace(0, T, N * 5)
+interpolant = hs_interpolant(x_opt, u_opt, T, f)
+t_interp = np.linspace(0, T, N * 10)
 x_hist, u_hist = interpolant(t_interp)
 t_interp = t_interp * TU
+
 
 dv = np.trapezoid(jnp.linalg.norm(u_opt, axis=1) * LU / TU**2, dx=h * TU)
 print(res)
@@ -77,16 +78,15 @@ print(f"Delta-V: {dv:.2f} m/s")
 plt.style.use("qlawcol.clean_plot")
 
 # plot orbital elements
-t = np.linspace(0, T, N + 1) * TU
 plt.figure(figsize=(9, 8))
 plt.subplot(3, 1, 1)
-plt.plot(t, x_opt[:, 0] * LU)
+plt.plot(t_interp, x_hist[:, 0] * LU)
 plt.ylabel("a")
 plt.subplot(3, 1, 2)
-plt.plot(t, x_opt[:, 1])
+plt.plot(t_interp, x_hist[:, 1])
 plt.ylabel("f")
 plt.subplot(3, 1, 3)
-plt.plot(t, x_opt[:, 2])
+plt.plot(t_interp, x_hist[:, 2])
 plt.ylabel("g")
 plt.xlabel("t (s)")
 
@@ -95,25 +95,21 @@ plt.xlabel("t (s)")
 plt.figure(figsize=(9, 4))
 plt.subplot(2, 1, 1)
 
-u_mag = np.linalg.norm(u_opt, axis=1) * LU / TU**2
-plt.plot(t, u_mag)
-plt.ylabel("u (m/s^2)")
+u_mag = np.linalg.norm(u_hist, axis=1) * LU / TU**2
+plt.plot(t_interp, u_mag)
+plt.ylabel("Control Magnitude (m/s^2)")
 
-u_dir = np.arctan2(u_opt[:, 1], u_opt[:, 0]) * 180 / np.pi - 90  # convert to degrees
+u_dir = np.arctan2(u_hist[:, 1], u_hist[:, 0]) * 180 / np.pi - 90  # convert to degrees
 plt.subplot(2, 1, 2)
-plt.plot(t, u_dir)
-plt.ylabel("Direction (deg)")
+plt.plot(t_interp, u_dir)
+plt.ylabel("Control Direction (deg)")
 
 plt.xlabel("t (s)")
 
 # plot trajectory in Cartesian space
-mee_array = np.zeros((N + 1, 6))
-mee_array[:, :3] = x_opt[:, :3]
-mee_array[:, -1] = x_opt[:, -1]
-# interpolate MEEs
-t_interp = np.linspace(0, T, N * 10) * TU
-mee_array = jax.vmap(jnp.interp, in_axes=(None, None, 0))(t_interp, t, mee_array.T).T
-
+mee_array = np.zeros((x_hist.shape[0], 6))
+mee_array[:, :3] = x_hist[:, :3]
+mee_array[:, -1] = x_hist[:, -1]
 
 cart_array = jax.vmap(mee_to_cartesian)(mee_array)
 plt.figure(figsize=(6, 6))
