@@ -1,7 +1,10 @@
 from typing import Callable, NamedTuple
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 from scipy.optimize import OptimizeResult, minimize
+from tqdm import tqdm
 
 Dynamics = Callable[[np.ndarray, np.ndarray], np.ndarray]
 Cost = Callable[[np.ndarray, np.ndarray], float]
@@ -20,6 +23,8 @@ class Guess(NamedTuple):
 
 
 class ProblemSpec(NamedTuple):
+    """Problem specification for trajectory optimization."""
+
     f: Dynamics
     cost: Cost
     constraints: Constraints
@@ -30,7 +35,7 @@ class ProblemSpec(NamedTuple):
 
 def trapezoidal_collocation(
     problem: ProblemSpec,
-    **optimizer_kwargs,
+    **minimize_options,
 ) -> tuple[np.ndarray, np.ndarray, OptimizeResult]:
     """
     Performs trajectory optimization using trapezoidal collocation.
@@ -43,7 +48,7 @@ def trapezoidal_collocation(
     nx = x_guess.shape[1]  # state dimension
     nu = u_guess.shape[1]  # control dimension
 
-    h = T / N  # time step
+    h: float = T / N  # time step
 
     # variable marshalling
     def unpack(z: np.ndarray):
@@ -58,32 +63,48 @@ def trapezoidal_collocation(
         return np.concatenate([x.flatten(), u.flatten()])
 
     # constraints
-    def collocation_constraints(z: np.ndarray) -> np.ndarray:
+    @jax.jit
+    def collocation_constraints(z: jnp.ndarray) -> jnp.ndarray:
         x, u = unpack(z)
-        col_cons = []
+        f_vec = jax.vmap(f, in_axes=(0, 0))
 
         # Trapezoidal collocation on interior points
-        for k in range(N):
-            x_next_pred = x[k] + 0.5 * h * (f(x[k], u[k]) + f(x[k + 1], u[k + 1]))
-            col_cons.append(x[k + 1] - x_next_pred)
+        x_nxt = x[:-1] + h / 2 * (f_vec(x[:-1], u[:-1]) + f_vec(x[1:], u[1:]))
+        collocation_conds = (x[1:] - x_nxt).flatten()
 
-        col_cons_flat = np.concatenate(col_cons).flatten()
-
-        # Additional constraints
-        additional_cons = constraints(*unpack(z))
-
-        return np.concatenate([col_cons_flat, additional_cons])
+        return jnp.concatenate([collocation_conds, constraints(x)])
 
     # call to SLSQP
     z0 = pack(x_guess, u_guess)
 
+    @jax.jit
+    def objective(z: np.ndarray) -> float:
+        x, u = unpack(z)
+        return cost(x, u)
+
+    def callback(intermediate_result: OptimizeResult):
+        dv = intermediate_result.fun
+        pbar.set_postfix_str(f"Cost: {dv:.6e}")
+        pbar.update(1)
+
+    # construct jax and hess functions for SLSQP using jax autograd
+    jac_func = jax.jit(jax.grad(objective))
+
+    pbar = tqdm(
+        total=minimize_options.get("maxiter", 100), desc="Optimization Progress"
+    )
+
     result = minimize(
-        lambda z: cost(*unpack(z)),
+        objective,
         z0,
         constraints={"type": "eq", "fun": collocation_constraints},
         method="SLSQP",
-        **optimizer_kwargs,
+        options=minimize_options,
+        jac=jac_func,
+        callback=callback,
     )
+
+    pbar.close()
 
     x_opt, u_opt = unpack(result.x)
     return x_opt, u_opt, result

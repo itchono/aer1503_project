@@ -1,3 +1,4 @@
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from qlawcol.collocation.trapezoidal import trapezoidal_collocation
@@ -13,21 +14,18 @@ r0, v0 = 0.0, 0.0
 rf, vf = 1.0, 0.0
 
 
-def f(x: np.ndarray, u: np.ndarray):
+def f(x: jnp.ndarray, u: jnp.ndarray):
     r, v = x
-    return np.array([v, u[0]])
+    return jnp.array([v, u[0]])
 
 
-def objective(x: np.ndarray, u: np.ndarray):
-    J = 0.0
-    for k in range(N):
-        J += 0.5 * h * (u[k] ** 2 + u[k + 1] ** 2)
-    return J.item()
+def objective(x: jnp.ndarray, u: jnp.ndarray):
+    return jnp.trapezoid(jnp.linalg.norm(u, axis=1) ** 2, dx=h)
 
 
-def constraints(x: np.ndarray, u: np.ndarray) -> np.ndarray:
+def constraints(x: jnp.ndarray) -> jnp.ndarray:
     # enforce boundary conditions
-    return np.array(
+    return jnp.array(
         [
             x[0, 0] - r0,  # r(0) = r0
             x[0, 1] - v0,  # v(0) = v0
@@ -41,7 +39,7 @@ x_guess = np.zeros((N + 1, nx))
 x_guess[:, 0] = np.linspace(r0, rf, N + 1)  # linear position guess
 x_guess[:, 1] = 0.0
 
-u_guess = np.zeros((N + 1, nu))
+u_guess = np.ones((N + 1, nu)) * 1e-6
 
 
 problem_args = (
@@ -64,7 +62,7 @@ print(res)
 # Plot result
 # -----------------------------
 
-t = np.linspace(0, T, N + 1)
+t = jnp.linspace(0, T, N + 1)
 
 plt.figure()
 plt.subplot(3, 1, 1)

@@ -1,4 +1,4 @@
-import numpy as np
+import jax.numpy as np
 
 
 def gve_2d_mee(mee: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
