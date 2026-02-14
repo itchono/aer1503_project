@@ -1,18 +1,18 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-from scipy.optimize import OptimizeResult, minimize
-from tqdm import tqdm
+import pyoptsparse
+from scipy.optimize import OptimizeResult
 
 from qlawcol.collocation.col_types import Dynamics, ProblemSpec
 
 
 def trapezoidal_collocation(
     problem: ProblemSpec,
-    **minimize_options,
+    **optimizer_options,
 ) -> tuple[np.ndarray, np.ndarray, OptimizeResult]:
     """
-    Performs trajectory optimization using trapezoidal collocation.
+    Performs trajectory optimization using trapezoidal collocation with pyOptSparse and IPOPT.
     """
     # unpack and infer problem parameters
     f, cost, constraints, guess, T = problem
@@ -38,7 +38,7 @@ def trapezoidal_collocation(
 
     # constraints
     @jax.jit
-    def collocation_constraints(z: jnp.ndarray) -> jnp.ndarray:
+    def collocation_constraints_jit(z: jnp.ndarray) -> jnp.ndarray:
         x, u = unpack(z)
         f_vec = jax.vmap(f, in_axes=(0, 0))
 
@@ -52,39 +52,50 @@ def trapezoidal_collocation(
 
         return jnp.concatenate([collocation_conds, constraints(x)])
 
-    # call to SLSQP
+    # call to IPOPT through pyoptsparse
     z0 = pack(x_guess, u_guess)
+    n_vars = len(z0)
+    n_cons = len(collocation_constraints_jit(z0))
 
     @jax.jit
-    def objective(z: np.ndarray) -> float:
+    def objective_jit(z: np.ndarray) -> float:
         x, u = unpack(z)
         return cost(x, u)
 
-    def callback(intermediate_result: OptimizeResult):
-        dv = intermediate_result.fun
-        pbar.set_postfix_str(f"Cost: {dv:.6e}")
-        pbar.update(1)
+    def objective_and_cons(z_dict):
+        z = z_dict["z"]
+        obj = objective_jit(z)
+        cons = collocation_constraints_jit(z)
+        return {"obj": obj, "con": cons}
 
-    # construct jax and hess functions for SLSQP using jax autograd
-    jac_func = jax.jit(jax.grad(objective))
+    # construct jac and hess functions for IPOPT using jax autograd
+    jac_cons_func = jax.jit(jax.jacfwd(collocation_constraints_jit))
+    jac_obj_func = jax.jit(jax.grad(objective_jit))
 
-    pbar = tqdm(
-        total=minimize_options.get("maxiter", 100), desc="Optimization Progress"
+    # get sparsity pattern
+    jac_cons_sparsity = jnp.abs(jac_cons_func(z0)) > 1e-12
+
+    def sens(z_dict, _):
+        z = z_dict["z"]
+        # jac_cons_values = jac_cons_func(z)[jac_cons_sparsity]
+
+        return {
+            # "con": {"z": jac_cons_values},
+            "con": {"z": jac_cons_func(z)},
+            "obj": {"z": jac_obj_func(z)},
+        }
+
+    opt_prob = pyoptsparse.Optimization("orbit_transfer", objective_and_cons)
+    opt_prob.addVarGroup("z", n_vars, "c", value=z0)
+    opt_prob.addConGroup(
+        "con", n_cons, lower=0, upper=0, jac={"z": jac_cons_sparsity.astype(float)}
     )
+    opt_prob.addObj("obj")
 
-    result = minimize(
-        objective,
-        z0,
-        constraints={"type": "eq", "fun": collocation_constraints},
-        method="SLSQP",
-        options=minimize_options,
-        jac=jac_func,
-        callback=callback,
-    )
+    opt = pyoptsparse.SLSQP(options=optimizer_options)
+    result = opt(opt_prob, sens=sens)
 
-    pbar.close()
-
-    x_opt, u_opt = unpack(result.x)
+    x_opt, u_opt = unpack(result.xStar["z"])
     return x_opt, u_opt, result
 
 

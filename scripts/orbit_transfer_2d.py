@@ -9,8 +9,8 @@ from qlawcol.dynamics.conversion import mee_to_cartesian
 from qlawcol.dynamics.gve import gve_2d_mee
 from qlawcol.dynamics.scaling import R_EARTH, get_tu
 
-T = 60.0  # final time
-N = 40  # number of intervals
+T = 40.0  # final time
+N = 30  # number of intervals
 h = T / N
 
 nx = 4  # [a, f, g, L]
@@ -20,7 +20,7 @@ LU = 8000e3
 TU = get_tu(LU)
 
 
-mee_start = np.array([1.0, 0.0, 0.0, 0.0])
+mee_start = np.array([1.0, 0.001, 0.0, 0.0])
 mee_end = np.array([2.0, 0.4, -0.1, 0.0])
 
 
@@ -62,7 +62,7 @@ problem_args = (
     T,
 )
 
-x_opt, u_opt, res = trapezoidal_collocation(problem_args, maxiter=500)
+x_opt, u_opt, res = trapezoidal_collocation(problem_args)
 
 # interpolate state
 interpolant = trapezoidal_interpolant(x_opt, u_opt, T, f)
