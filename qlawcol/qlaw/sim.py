@@ -22,18 +22,25 @@ class ODEArgs(NamedTuple):
     convergence_tol: float
 
 
+def sim_control(state: ODEState, args: ODEArgs) -> jnp.ndarray:
+    """Compute the control acceleration for the current state."""
+    qlaw_params = args.qlaw_params._replace(
+        accel_mag=args.thrust / state.mass
+    )  # update accel_mag based on current mass
+    u = qlaw_mee(state.mee, qlaw_params)
+    u = (
+        u / (jnp.linalg.norm(u) + 1e-12) * args.thrust / state.mass
+    )  # convert to acceleration
+    return u
+
+
 def sim_ode(t: float, state: ODEState, args: ODEArgs) -> ODEState:
     """ODE function for simulating the spacecraft state."""
     # unpack state
     mee, mass = state
 
-    # assemble qlaw params using current thrust and mass
-    # (replace the accel field)
-    qlaw_params = args.qlaw_params._replace(accel_mag=args.thrust / mass)
-
     # compute control
-    u = qlaw_mee(mee, qlaw_params)
-    u = u / (jnp.linalg.norm(u) + 1e-12) * args.thrust / mass  # convert to acceleration
+    u = sim_control(state, args)
 
     # compute GVE in MEE
     A, b = gve_mee(mee)
@@ -116,10 +123,14 @@ def simulate(
         throw=False,
     )
 
+    # postprocess to get control solutions
+    u = jax.vmap(sim_control, in_axes=(0, None))(sol.ys, args)
+
     # rescale solution
     ts = sol.ts * tu  # rescale time
     mee = sol.ys.mee.at[:, 0].multiply(lu)  # rescale MEE (only SMA needs rescaling)
     mass = sol.ys.mass  # mass is already in physical units
     result = sol.result
+    u = u * lu / tu**2  # rescale control to physical units
 
-    return ts, mee, mass, result
+    return ts, mee, mass, u, result
