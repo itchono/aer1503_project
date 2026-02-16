@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from qlawcol.dynamics.conversion import mee_to_keplerian
 from qlawcol.dynamics.gve import gve_mee
 from qlawcol.dynamics.scaling import R_EARTH, get_tu
-from qlawcol.qlaw.control_kep import QLawParams, qlaw_kep
+from qlawcol.qlaw.control import QLawParams, qlaw
 
 
 class ODEState(NamedTuple):
@@ -32,7 +32,7 @@ def sim_control(state: ODEState, args: ODEArgs) -> jnp.ndarray:
     qlaw_params = args.qlaw_params._replace(
         accel_mag=args.thrust / state.mass
     )  # update accel_mag based on current mass
-    u = qlaw_kep(mee_to_keplerian(state.mee), qlaw_params)
+    u = qlaw(mee_to_keplerian(state.mee), qlaw_params)
 
     return u / (jnp.linalg.norm(u) + 1e-12) * args.thrust / state.mass
 

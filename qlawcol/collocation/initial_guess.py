@@ -36,3 +36,18 @@ def linear_elements_guess(
     x_guess[:, :-1] = mee_start[:-1] + np.outer(s, (mee_end - mee_start)[:-1])
     x_guess[:, -1] = np.linspace(0, T, N + 1)  # linear angle guess
     return x_guess
+
+
+def q_law_guess(
+    mee_start: np.ndarray,
+    mee_end: np.ndarray,
+    N: int,
+    T: float,
+) -> np.ndarray:
+    """
+    Generate an initial guess for the modified equinoctial elements (mee)
+    using the Q-law.
+
+    T should be in nondimensional time units.
+    """
+    pass

@@ -1,12 +1,19 @@
-from .hermite_simpson import (
-    hs_collocation,
-    hs_interpolant,
+from .dense import (
+    hs_collocation_dense,
+    trapezoidal_collocation_dense,
 )
-from .trapezoidal import trapezoidal_collocation, trapezoidal_interpolant
+from .interpolants import hs_interpolant, trapezoidal_interpolant
+from .sparse import (
+    hs_collocation_sparse,
+    trapezoidal_collocation_sparse,
+)
 
 __all__ = [
-    "trapezoidal_collocation",
+    "trapezoidal_collocation_dense",
+    "trapezoidal_collocation_sparse",
     "trapezoidal_interpolant",
-    "hs_collocation",
+    "hs_collocation_dense",
     "hs_interpolant",
+    "hs_collocation_sparse",
+    "hs_interpolant_sparse",
 ]

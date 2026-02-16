@@ -6,11 +6,10 @@ from scipy.optimize import OptimizeResult
 
 from qlawcol.collocation.col_types import Dynamics, ProblemSpec
 
-PyOptSparseCOO = dict[str, list[float] | list[int]]
-# mat = {'coo':[row, col, data], 'shape':[nrow, ncols]}
+from .trapezoidal_sparse import PyOptSparseCOO, mask_to_sparse
 
 
-def trap_col_jac_sparsity(
+def hs_col_jac_sparsity(
     N: int, nx: int, nu: int
 ) -> tuple[PyOptSparseCOO, PyOptSparseCOO]:
     """
@@ -74,25 +73,12 @@ def trap_col_jac_sparsity(
     return jac_x, jac_u
 
 
-def mask_to_sparse(coo_mask: PyOptSparseCOO, data: np.ndarray) -> PyOptSparseCOO:
-    """
-    Takes a dense matrix and preserves only the entries corresponding to the nonzero pattern in coo_mask.
-    """
-    row_idx, col_idx, _ = coo_mask["coo"]
-    sparse_data = data[row_idx, col_idx]
-
-    return {
-        "coo": [row_idx, col_idx, sparse_data],
-        "shape": coo_mask["shape"],
-    }
-
-
-def trapezoidal_collocation(
+def hs_collocation_sparse(
     problem: ProblemSpec,
     **optimizer_options,
 ) -> tuple[np.ndarray, np.ndarray, OptimizeResult]:
     """
-    Performs trajectory optimization using trapezoidal collocation with pyOptSparse and IPOPT.
+    Performs trajectory optimization using Hermite-Simpson collocation with pyOptSparse and IPOPT.
     """
     # unpack and infer problem parameters
     f, cost, constraints, guess, T = problem
@@ -118,10 +104,14 @@ def trapezoidal_collocation(
         f_k = f_eval[:-1]
         f_k_plus_1 = f_eval[1:]
 
-        # Trapezoidal collocation on interior points
-        x_nxt = x[:-1] + h / 2 * (f_k + f_k_plus_1)
+        # get midpoints
+        x_c = (x[:-1] + x[1:]) / 2 + (h / 8) * (f_k - f_k_plus_1)
+        u_c = (u[:-1] + u[1:]) / 2
+        f_c = f_vec(x_c, u_c)
 
-        return (x[1:] - x_nxt).flatten()
+        # collocation condition
+        x_nxt = x[:-1] + h / 6 * (f_k + 4 * f_c + f_k_plus_1)
+        return (x[1:] - x_nxt).flatten() / h  # scaling by h to improve conditioning
 
     @jax.jit
     def objective_and_cons(xdict: dict[str, jnp.ndarray]) -> dict[str, jnp.ndarray]:
@@ -136,7 +126,7 @@ def trapezoidal_collocation(
         }
 
     # get sparsity pattern of collocation constraint jacobian for efficient optimization
-    jac_col_x_sparsity, jac_col_u_sparsity = trap_col_jac_sparsity(N, nx, nu)
+    jac_col_x_sparsity, jac_col_u_sparsity = hs_col_jac_sparsity(N, nx, nu)
 
     # numerically probe jac of additional constraints
     jac_add_x_sparsity = (
@@ -180,7 +170,7 @@ def trapezoidal_collocation(
             "additional_constr": {"x": jac_addcon_x},
         }
 
-    opt_prob = pyoptsparse.Optimization("orbit_transfer", objective_and_cons)
+    opt_prob = pyoptsparse.Optimization("orbit_transfer_hs", objective_and_cons)
     opt_prob.addVarGroup("x", len_x, value=x_guess.flatten())
     opt_prob.addVarGroup("u", len_u, value=u_guess.flatten())
 
@@ -208,53 +198,3 @@ def trapezoidal_collocation(
     x_opt = result.xStar["x"].reshape((N + 1, nx))
     u_opt = result.xStar["u"].reshape((N + 1, nu))
     return x_opt, u_opt, result
-
-
-def trapezoidal_interpolant(
-    x_opt: np.ndarray, u_opt: np.ndarray, T: float, f: Dynamics
-):
-    """
-    Creates a quadratic interpolant for the state and a linear interpolant for the control
-    based on the trapezoidal collocation solution.
-    """
-
-    N = x_opt.shape[0] - 1
-    h = T / N
-    t_nodes = np.linspace(0, T, N + 1)
-    f_vec = jax.vmap(f, in_axes=(0, 0))
-    f_opt = f_vec(x_opt, u_opt)
-
-    def interpolant(t: float | np.ndarray):
-        """
-        Interpolates the state and control at a given time t.
-        """
-        if isinstance(t, float):
-            t = np.array([t])
-
-        # Find the interval for each t
-        interval_indices = np.searchsorted(t_nodes, t, side="right") - 1
-        interval_indices = np.clip(interval_indices, 0, N - 1)
-        t_k = t_nodes[interval_indices]
-        tau = ((t - t_k) / h)[:, None]
-
-        # Quadratic interpolation for state
-        x_k = x_opt[interval_indices]
-        x_k_plus_1 = x_opt[interval_indices + 1]
-        f_k = f_opt[interval_indices]
-        f_k_plus_1 = f_opt[interval_indices + 1]
-        x_interp = (
-            (1 - tau) * x_k
-            + tau * x_k_plus_1
-            + tau * (1 - tau) * h / 8 * (f_k_plus_1 - f_k)
-        )
-
-        # Linear interpolation for control
-        u_k = u_opt[interval_indices]
-        u_k_plus_1 = u_opt[interval_indices + 1]
-        u_interp = (1 - tau) * u_k + tau * u_k_plus_1
-
-        if x_interp.shape[0] == 1:
-            return x_interp[0], u_interp[0]
-        return x_interp, u_interp
-
-    return interpolant

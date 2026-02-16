@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Circle
-from qlawcol.collocation import hs_collocation, hs_interpolant
+from qlawcol.collocation import hs_collocation_sparse, hs_interpolant
 from qlawcol.dynamics.conversion import (
     keplerian_to_mee,
     mee_to_cartesian,
@@ -15,26 +15,28 @@ from qlawcol.qlaw.control import QLawParams
 from qlawcol.qlaw.sim import ODEArgs, dfx, simulate
 from scipy.interpolate import CubicSpline
 
-initial_kep = jnp.array([7000e3, 0.01, 0, 0, 0, 0])
+initial_kep = jnp.array([7000e3, 0.01, jnp.radians(0.05), 0, 0, 0])
 initial_mee = keplerian_to_mee(initial_kep)
-target_orbit = jnp.array([8000e3, 0.0, 0.05, 0, 0])
+target_orbit = jnp.array([42000e3, 0.01, 0, 0, 0])
 qlaw_params = QLawParams(
     target=target_orbit,
-    w_oe=jnp.array([1.0, 1.0, 1.0, 0.0, 0.0]),
+    w_oe=jnp.array([1.0, 1.0, 0.0, 0.0, 0.0]),
     w_pen=0,
     rp_min=1,
     k=100,
-    eta=0.5,
+    eta=0.0,
     accel_mag=1,
 )
 ode_args = ODEArgs(
     qlaw_params=qlaw_params,
     thrust=1,  # N
-    exhaust_velocity=3100 * 9.81,  # m/s
-    convergence_tol=1e-3,
+    exhaust_velocity=1e10,  # infinite ISP
+    convergence_tol=5e-2,
 )
 
-ts, mee, mass, u, result = simulate(initial_mee, 300.0, ode_args, t_max=1e7)
+ts, mee, mass, control, result = simulate(
+    initial_mee, 300.0, ode_args.as_static(), t_max=200 * 86400, max_steps=1000
+)
 print("Simulation result:", dfx.RESULTS[result])
 
 # filter out any NaN values (in case of failure modes)
@@ -42,14 +44,18 @@ valid_indices = jnp.where(jnp.isfinite(ts))
 ts = ts[valid_indices]
 mee = mee[valid_indices]
 mass = mass[valid_indices]
-u = u[valid_indices]
+control = control[valid_indices]
 
+delta_v = jnp.log(mass[0] / mass[-1]) * ode_args.exhaust_velocity
+print(f"Timesteps: {len(ts)}")
+print(f"ToF: {ts[-1] / 86400:.2f} days")
+print(f"Total delta-v expended: {delta_v:.2f} m/s")
 
 kep = jax.vmap(mee_to_keplerian)(mee)
 
 # interpolate mees before plotting
 mee_interpolant = CubicSpline(ts, mee, axis=0)
-control_interpolant = CubicSpline(ts, u, axis=0)
+control_interpolant = CubicSpline(ts, control, axis=0)
 n_revs = max(mee[:, 5]) / (2 * jnp.pi)
 ts_dense = jnp.linspace(ts[0], ts[-1], int(100 * n_revs))
 mee_dense_nd = mee_interpolant(ts_dense)
@@ -62,7 +68,7 @@ LU = 7000e3
 TU = get_tu(LU)
 
 T = max(ts) / TU
-N = int(n_revs * 3.5)  # number of intervals
+N = int(n_revs * 5)  # number of intervals
 h = T / N
 
 print(f"Using collocation with T={T:.2f} TU, N={N}, h={h:.4f} TU")
@@ -75,7 +81,7 @@ def f(x: np.ndarray, u: np.ndarray):
 
 def objective(x: np.ndarray, u: np.ndarray):
     # integral of u^2 over time using trapezoidal rule
-    return jnp.trapezoid(jnp.linalg.norm(u, axis=1) ** 2, dx=h)
+    return jnp.trapezoid(jnp.linalg.norm(u, axis=1), dx=h)
 
 
 def constraints(x: np.ndarray) -> np.ndarray:
@@ -113,7 +119,9 @@ problem_args = (
     T,
 )
 
-x_opt, u_opt, res = hs_collocation(problem_args, maxiter=500, ftol=1e-9)
+print(f"Initial guess objective: {objective(x_guess, u_guess):.4f}")
+
+x_opt, u_opt, res = hs_collocation_sparse(problem_args, max_iter=1000, tol=1e-5)
 
 # interpolate state
 mee_interpolant = hs_interpolant(x_opt, u_opt, T, f)

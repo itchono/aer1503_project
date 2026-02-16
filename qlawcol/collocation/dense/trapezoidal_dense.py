@@ -4,15 +4,15 @@ import numpy as np
 from scipy.optimize import OptimizeResult, minimize
 from tqdm import tqdm
 
-from qlawcol.collocation.col_types import Dynamics, ProblemSpec
+from qlawcol.collocation.col_types import ProblemSpec
 
 
-def hs_collocation(
+def trapezoidal_collocation_dense(
     problem: ProblemSpec,
     **minimize_options,
 ) -> tuple[np.ndarray, np.ndarray, OptimizeResult]:
     """
-    Performs trajectory optimization using Hermite-Simpson collocation.
+    Performs trajectory optimization using trapezoidal collocation with SciPy's SLSQP.
     """
     # unpack and infer problem parameters
     f, cost, constraints, guess, T = problem
@@ -46,14 +46,11 @@ def hs_collocation(
         f_k = f_eval[:-1]
         f_k_plus_1 = f_eval[1:]
 
-        # get midpoints
-        x_c = (x[:-1] + x[1:]) / 2 + (h / 8) * (f_k - f_k_plus_1)
-        u_c = (u[:-1] + u[1:]) / 2
-        f_c = f_vec(x_c, u_c)
-
-        # collocation condition
-        x_nxt = x[:-1] + h / 6 * (f_k + 4 * f_c + f_k_plus_1)
-        collocation_conds = (x[1:] - x_nxt).flatten()
+        # Trapezoidal collocation on interior points
+        x_nxt = x[:-1] + h / 2 * (f_k + f_k_plus_1)
+        collocation_conds = (
+            x[1:] - x_nxt
+        ).flatten() / h  # scaling by h to improve conditioning
 
         return jnp.concatenate([collocation_conds, constraints(x)])
 
@@ -96,60 +93,3 @@ def hs_collocation(
 
     x_opt, u_opt = unpack(result.x)
     return x_opt, u_opt, result
-
-
-def hs_interpolant(x_opt: np.ndarray, u_opt: np.ndarray, T: float, f: Dynamics):
-    """
-    Creates a cubic Hermite spline interpolant for the state and a linear
-    interpolant for the control.
-    """
-    N = x_opt.shape[0] - 1
-    h = T / N
-    t_nodes = np.linspace(0, T, N + 1)
-    f_vec = jax.vmap(f, in_axes=(0, 0))
-    f_opt = f_vec(x_opt, u_opt)
-
-    def interpolant(t: float | np.ndarray):
-        """
-        Interpolates the state and control at a given time t.
-        """
-        if isinstance(t, float):
-            t = np.array([t])
-
-        # Find the interval for each t
-        interval_indices = np.searchsorted(t_nodes, t, side="right") - 1
-        interval_indices = np.clip(interval_indices, 0, N - 1)
-
-        # Normalize time in each interval
-        tau = (t - t_nodes[interval_indices]) / h
-
-        # Get interval start and end points
-        x_k = x_opt[interval_indices]
-        x_k_plus_1 = x_opt[interval_indices + 1]
-        f_k = f_opt[interval_indices]
-        f_k_plus_1 = f_opt[interval_indices + 1]
-        u_k = u_opt[interval_indices]
-        u_k_plus_1 = u_opt[interval_indices + 1]
-
-        # Hermite basis functions
-        H0 = 2 * tau**3 - 3 * tau**2 + 1
-        H1 = tau**3 - 2 * tau**2 + tau
-        H2 = -2 * tau**3 + 3 * tau**2
-        H3 = tau**3 - tau**2
-
-        # Interpolate state
-        x_interp = (
-            H0[:, None] * x_k
-            + H1[:, None] * h * f_k
-            + H2[:, None] * x_k_plus_1
-            + H3[:, None] * h * f_k_plus_1
-        )
-
-        # Interpolate control (linear)
-        u_interp = (1 - tau)[:, None] * u_k + tau[:, None] * u_k_plus_1
-
-        if len(t) == 1:
-            return x_interp[0], u_interp[0]
-        return x_interp, u_interp
-
-    return interpolant
