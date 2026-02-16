@@ -20,7 +20,7 @@ LU = 8000e3
 TU = get_tu(LU)
 
 
-mee_start = np.array([1.0, 0.001, 0.0, 0.0])
+mee_start = np.array([1.0, 0.0, 0.0, 0.0])
 mee_end = np.array([2.0, 0.4, -0.1, 0.0])
 
 
