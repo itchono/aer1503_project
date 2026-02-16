@@ -10,7 +10,7 @@ from qlawcol.dynamics.gve import gve_2d_mee
 from qlawcol.dynamics.scaling import R_EARTH, get_tu
 
 T = 40.0  # final time
-N = 30  # number of intervals
+N = 60  # number of intervals
 h = T / N
 
 nx = 4  # [a, f, g, L]

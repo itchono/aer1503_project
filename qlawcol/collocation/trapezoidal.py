@@ -124,23 +124,6 @@ def trapezoidal_collocation(
         return (x[1:] - x_nxt).flatten()
 
     @jax.jit
-    def flat_col_constraints(x_flat, u_flat):
-        x = x_flat.reshape((N + 1, nx))
-        u = u_flat.reshape((N + 1, nu))
-        return collocation_constraints(x, u)
-
-    @jax.jit
-    def flat_add_constraints(x_flat):
-        x = x_flat.reshape((N + 1, nx))
-        return constraints(x)
-
-    @jax.jit
-    def flat_cost(x_flat, u_flat):
-        x = x_flat.reshape((N + 1, nx))
-        u = u_flat.reshape((N + 1, nu))
-        return cost(x, u)
-
-    @jax.jit
     def objective_and_cons(xdict: dict[str, jnp.ndarray]) -> dict[str, jnp.ndarray]:
         x = xdict["x"].reshape((N + 1, nx))
         u = xdict["u"].reshape((N + 1, nu))
@@ -157,8 +140,8 @@ def trapezoidal_collocation(
 
     # numerically probe jac of additional constraints
     jac_add_x_sparsity = (
-        jnp.abs(jax.jacfwd(flat_add_constraints, argnums=0)(x_guess.flatten())) > 1e-8
-    )  # then, convert to PyOptSparse COO format
+        jnp.abs(jax.jacfwd(constraints, argnums=0)(x_guess)) > 1e-8
+    ).reshape(-1, len_x)
     jac_add_x_sparsity = {
         "coo": [
             np.where(jac_add_x_sparsity)[0],
@@ -170,17 +153,21 @@ def trapezoidal_collocation(
 
     @jax.jit
     def sens(xdict: dict[str, jnp.ndarray], _):
-        x_flat = xdict["x"]
-        u_flat = xdict["u"]
+        x = xdict["x"].reshape((N + 1, nx))
+        u = xdict["u"].reshape((N + 1, nu))
 
         # for minimum energy, we assume obj only has grad wrt u
-        jac_obj_u = jax.grad(flat_cost, argnums=1)(x_flat, u_flat)
+        jac_obj_u = jax.grad(cost, argnums=1)(x, u).flatten()
 
         # collocation constraints
         # jacobians are always taller than wide so jacfwd is more efficient
-        jac_colcon_x = jax.jacfwd(flat_col_constraints, argnums=0)(x_flat, u_flat)
-        jac_colcon_u = jax.jacfwd(flat_col_constraints, argnums=1)(x_flat, u_flat)
-        jac_add_x = jax.jacfwd(flat_add_constraints, argnums=0)(x_flat)
+        jac_colcon_x = jax.jacfwd(collocation_constraints, argnums=0)(x, u).reshape(
+            -1, len_x
+        )
+        jac_colcon_u = jax.jacfwd(collocation_constraints, argnums=1)(x, u).reshape(
+            -1, len_u
+        )
+        jac_add_x = jax.jacfwd(constraints, argnums=0)(x).reshape(-1, len_x)
 
         # apply sparsity pattern to all jacobians
         jac_colcon_x = mask_to_sparse(jac_col_x_sparsity, jac_colcon_x)
@@ -215,9 +202,7 @@ def trapezoidal_collocation(
 
     opt_prob.addObj("obj")
 
-    opt = pyoptsparse.IPOPT(
-        options=optimizer_options | {"mu_init": 1e-4, "nlp_scaling_method": "none"}
-    )
+    opt = pyoptsparse.IPOPT(options=optimizer_options)
     result = opt(opt_prob, sens=sens)
 
     x_opt = result.xStar["x"].reshape((N + 1, nx))

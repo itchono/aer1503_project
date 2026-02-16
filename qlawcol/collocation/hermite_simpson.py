@@ -38,7 +38,7 @@ def hs_collocation(
 
     # constraints
     @jax.jit
-    def collocation_constraints(z: jnp.ndarray) -> jnp.ndarray:
+    def combined_constraints(z: jnp.ndarray) -> jnp.ndarray:
         x, u = unpack(z)
         f_vec = jax.vmap(f, in_axes=(0, 0))
 
@@ -72,6 +72,7 @@ def hs_collocation(
 
     # construct jax and hess functions for SLSQP using jax autograd
     jac_func = jax.jit(jax.grad(objective))
+    jac_constraints = jax.jit(jax.jacfwd(combined_constraints))
 
     pbar = tqdm(
         total=minimize_options.get("maxiter", 100), desc="Optimization Progress"
@@ -80,7 +81,11 @@ def hs_collocation(
     result = minimize(
         objective,
         z0,
-        constraints={"type": "eq", "fun": collocation_constraints},
+        constraints={
+            "type": "eq",
+            "fun": combined_constraints,
+            "jac": jac_constraints,
+        },
         method="SLSQP",
         options=minimize_options,
         jac=jac_func,
