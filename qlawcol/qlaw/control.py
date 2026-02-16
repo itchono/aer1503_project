@@ -3,7 +3,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from qlawcol.dynamics.gve import gve_kep
+from qlawcol.dynamics.gve import gve_mee
 
 
 class QLawParams(NamedTuple):
@@ -20,48 +20,44 @@ class QLawParams(NamedTuple):
     r: int = 2
 
 
-def oexx_kep(kep: jnp.ndarray, f: float) -> jnp.ndarray:
-    a, e, i, _, omega, _ = kep
+def oexx_mee(mee_5: jax.Array, accel_mag: float) -> jax.Array:
+    """
+    Computes maximum achievable rates of change of
+    modified equinoctial elements when applying
+    a constant acceleration of accel_mag.
 
+    Uses a simplified approximate formulation for f and g.
+
+    Parameters
+    ----------
+    mee_5: jax.Array
+        Modified equinoctial elements in the form
+        [a, f, g, h, k], which excludes true longitude.
+    max_accel: float
+        Maximum acceleration to be applied (in appropriate units).
+    """
+    a, f, g, h, k = mee_5
+
+    # compute eccentricity and semi-latus rectum
+    e = jnp.sqrt(f**2 + g**2)
     p = a * (1 - e**2)
-    h = jnp.sqrt(p)
 
-    a_xx = 2 * f * jnp.sqrt((a**3 * (1 + e)) / (1 - e))
-    e_xx = 2 * p * f / h
-    i_xx = (
-        p
-        * f
-        / (h * (jnp.sqrt(1 - e**2 * jnp.sin(omega) ** 2) - e * jnp.abs(jnp.cos(omega))))
-    )
+    a_dot_max = 2 * a * jnp.sqrt(a) * jnp.sqrt((1 + e) / (1 - e))
+    f_dot_max = 2 * jnp.sqrt(p)
+    g_dot_max = 2 * jnp.sqrt(p)
+    s_squared = 1 + h**2 + k**2
+    h_dot_max = 1 / 2 * jnp.sqrt(p) * s_squared / (jnp.sqrt(1 - g**2) + f)
+    k_dot_max = 1 / 2 * jnp.sqrt(p) * s_squared / (jnp.sqrt(1 - f**2) + g)
 
-    u = (1 - e**2) / (2 * e**3)
-    v = jnp.sqrt(1 / 4 * ((1 - e**2) / e**3) ** 2 + 1 / 27)
-    cos_th_xx = (u + v) ** (1 / 3) - (-u + v) ** (1 / 3) - 1 / e
-    cos_th_xx_2 = cos_th_xx**2
-    sin_th_xx_2 = 1 - cos_th_xx_2
-    r_xx = p / (1 + e * cos_th_xx)
+    oexx = jnp.array([a_dot_max, f_dot_max, g_dot_max, h_dot_max, k_dot_max])
 
-    omega_x = f / (e * h) * jnp.sqrt(p**2 * cos_th_xx_2 + (p + r_xx) ** 2 * sin_th_xx_2)
-
-    Omega_xx = (
-        p
-        * f
-        / (
-            h
-            * jnp.sin(i)
-            * (jnp.sqrt(1 - e**2 * jnp.cos(omega) ** 2) - e * jnp.abs(jnp.sin(omega)))
-        )
-    )
-
-    return jnp.array([a_xx, e_xx, i_xx, Omega_xx, omega_x])
+    return oexx * accel_mag
 
 
-def proximity_quotient_kep(state: jnp.ndarray, params: QLawParams) -> float:
+def proximity_quotient(state: jnp.ndarray, params: QLawParams) -> float:
     target, w_oe, w_p, accel_mag, rp_min, k, eta, deadband, m, n, r = params
 
     dx = state[:5] - target[:5]
-    # wrap Omega, omega using arccos(cos()) trick
-    dx = dx.at[3:5].set(jnp.arccos(jnp.cos(dx[3:5])))
 
     w_oe = jnp.where(jnp.abs(dx) > deadband, w_oe, 0)
 
@@ -72,20 +68,24 @@ def proximity_quotient_kep(state: jnp.ndarray, params: QLawParams) -> float:
     rp = a * (1 - e)
     penalty = jnp.exp(k * (1 - rp / rp_min))
 
-    oexx = oexx_kep(state, accel_mag)
+    oexx = oexx_mee(state[:5], accel_mag)
 
     return (1 + w_p * penalty) * jnp.sum(w_oe * s_oe * (dx / oexx) ** 2)
 
 
-def qdot_at_theta(theta: float, state: jnp.ndarray, params: QLawParams) -> jnp.ndarray:
-    state = state.at[-1].set(theta)
-    G = gve_kep(state)[0]
-    grad_q = jax.grad(proximity_quotient_kep)(state, params)
+def qdot_at_truelong(
+    truelong: float, state: jnp.ndarray, params: QLawParams
+) -> jnp.ndarray:
+    state = state.at[-1].set(truelong)
+    G = gve_mee(state)[0]
+    grad_q = jax.grad(proximity_quotient)(state, params)
 
     return -(jnp.linalg.norm(G.T @ grad_q) ** 2)
 
 
 def qdot_nn_gss(state: jnp.ndarray, params: QLawParams, tol: float = 1e-5) -> float:
+    # find minimum qdot
+
     # Golden ratio
     phi = (1 + jnp.sqrt(5)) / 2
     res = 2 - phi  # reciprocal of golden ratio
@@ -95,14 +95,15 @@ def qdot_nn_gss(state: jnp.ndarray, params: QLawParams, tol: float = 1e-5) -> fl
 
     def wh_body(val):
         a, b = val
-        c = b - res * (b - a)
-        d = a + res * (b - a)
 
-        q_c = qdot_at_theta(c, state, params)
-        q_d = qdot_at_theta(d, state, params)
+        c = a + res * (b - a)
+        d = b - res * (b - a)
+
+        qdot_c = qdot_at_truelong(c, state, params)
+        qdot_d = qdot_at_truelong(d, state, params)
 
         return jax.lax.cond(
-            q_c < q_d,
+            qdot_c < qdot_d,
             lambda: (a, d),
             lambda: (c, b),
         )
@@ -112,18 +113,21 @@ def qdot_nn_gss(state: jnp.ndarray, params: QLawParams, tol: float = 1e-5) -> fl
         return (b - a) > tol
 
     a, b = jax.lax.while_loop(wh_cond, wh_body, (a, b))
-    return (a + b) / 2
+    return qdot_at_truelong((a + b) / 2, state, params)
 
 
-def qlaw_kep(state: jnp.ndarray, params: QLawParams) -> jnp.ndarray:
-    G = gve_kep(state)[0]
-    grad_q = jax.grad(proximity_quotient_kep)(state, params)
+def qlaw_mee(state: jnp.ndarray, params: QLawParams) -> jnp.ndarray:
+    G = gve_mee(state)[0]
+    grad_q = jax.grad(proximity_quotient)(state, params)
 
     u = -G.T @ grad_q
 
-    qdot_n = qdot_at_theta(state[-1], state, params)
+    qdot_n = qdot_at_truelong(state[-1], state, params)
     qdot_nn = qdot_nn_gss(state, params)
-
     eta_curr = qdot_n / qdot_nn
 
-    return u
+    return jax.lax.cond(
+        eta_curr < params.eta,
+        lambda: jnp.zeros_like(u),
+        lambda: u,
+    )
