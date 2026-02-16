@@ -112,3 +112,53 @@ def gve_mee(state: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
     b = jnp.array([0, 0, 0, 0, 0, q**2 * sqrt(p) / p**2])
 
     return A, b
+
+
+def gve_kep(state: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    "Au+b" form of Gauss variational equations for Keplerian elements
+    [a e i Omega omega theta].
+
+    i.e. x_dot = A(x) * u + b(x)
+    where u is the acceleration vector in the LVLH frame.
+
+    Assumes non-dimensionalized units with mu = 1.
+
+    Parameters
+    ----------
+    state : Array
+        State vector in Keplerian elements.
+
+    Returns
+    -------
+    A : Array
+        A-matrix for Gauss variational equation.
+    b : Array
+        b-vector for Gauss variational equation.
+
+    """
+    # unpack state vector
+    a, e, i, _, omega, theta = state
+
+    # shorthand quantities
+    p = a * (1 - e**2)
+    r = p / (1 + e * cos(theta))
+    h = sqrt(p)
+
+    A = jnp.array(
+        [
+            [2 * a**2 / h * e * sin(theta), 2 * a**2 / h * p / r, 0],
+            [p * sin(theta) / h, ((p + r) * cos(theta) + r * e) / h, 0],
+            [0, 0, r * cos(theta + omega) / h],
+            [0, 0, r * sin(theta + omega) / (h * sin(i))],
+            [
+                -p / (e * h) * cos(theta),
+                (p + r) / (e * h) * sin(theta),
+                -r * sin(theta + omega) / (h * jnp.tan(i)),
+            ],
+            [1 / (e * h) * p * cos(theta), -1 / (e * h) * (p + r) * sin(theta), 0],
+        ],
+    )
+    b = jnp.array([0, 0, 0, 0, 0, h / r**2])
+
+    return A, b

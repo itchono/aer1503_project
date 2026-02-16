@@ -6,6 +6,7 @@ from qlawcol.dynamics.conversion import (
     mee_to_cartesian,
     mee_to_keplerian,
 )
+from qlawcol.dynamics.scaling import R_EARTH
 from qlawcol.qlaw.control import QLawParams
 from qlawcol.qlaw.sim import ODEArgs, dfx, simulate
 from scipy.interpolate import CubicSpline
@@ -19,17 +20,19 @@ qlaw_params = QLawParams(
     w_pen=0,
     rp_min=1,
     k=100,
-    eta=0.5,
+    eta=0.945,
     accel_mag=1,
 )
 ode_args = ODEArgs(
     qlaw_params=qlaw_params,
     thrust=1,  # N
     exhaust_velocity=3100 * 9.81,  # m/s
-    convergence_tol=1e-3,
+    convergence_tol=5e-2,
 )
 
-ts, mee, mass, result = simulate(initial_mee, 300.0, ode_args, t_max=1e7)
+ts, mee, mass, control, result = simulate(
+    initial_mee, 300.0, ode_args.as_static(), t_max=200 * 86400, max_steps=40000
+)
 print("Simulation result:", dfx.RESULTS[result])
 
 # filter out any NaN values (in case of failure modes)
@@ -37,6 +40,12 @@ valid_indices = jnp.where(jnp.isfinite(ts))
 ts = ts[valid_indices]
 mee = mee[valid_indices]
 mass = mass[valid_indices]
+
+delta_v = jnp.log(mass[0] / mass[-1]) * ode_args.exhaust_velocity
+print(f"Timesteps: {len(ts)}")
+print(f"ToF: {ts[-1] / 86400:.2f} days")
+print(f"Propellant Mass Used: {mass[0] - mass[-1]:.2f} kg")
+print(f"Total delta-v expended: {delta_v:.2f} m/s")
 
 
 kep = jax.vmap(mee_to_keplerian)(mee)
@@ -46,26 +55,26 @@ interpolant = CubicSpline(ts, mee, axis=0)
 n_revs = max(mee[:, 5]) / (2 * jnp.pi)
 ts_dense = jnp.linspace(ts[0], ts[-1], int(100 * n_revs))
 mee_dense_nd = interpolant(ts_dense)
-mee_dense_nd[:, 0] /= 6378e3
+mee_dense_nd[:, 0] /= R_EARTH
 
 
 cart = jax.vmap(mee_to_cartesian)(mee_dense_nd)
 
+plt.style.use("qlawcol.clean_plot")
 plt.figure()
 plt.subplot(2, 1, 1)
-plt.plot(ts, kep[:, 0] * 1e-3)
+plt.plot(ts / 86400, kep[:, 0] * 1e-3)
 plt.axhline(target_orbit[0] * 1e-3, color="r", linestyle="--")
-plt.xlabel("Time (s)")
+plt.xlabel("Time (days)")
 plt.ylabel("Semi-major Axis (km)")
 plt.subplot(2, 1, 2)
-plt.plot(ts, kep[:, 1])
+plt.plot(ts / 86400, kep[:, 1])
 plt.axhline(target_orbit[1], color="r", linestyle="--")
-plt.xlabel("Time (s)")
+plt.xlabel("Time (days)")
 plt.ylabel("Eccentricity")
-plt.tight_layout()
 
 plt.figure()
-plt.plot(cart[:, 0] * 6378e3, cart[:, 1] * 6378e3)
+plt.plot(cart[:, 0] * R_EARTH, cart[:, 1] * R_EARTH)
 plt.xlabel("x (km)")
 plt.ylabel("y (km)")
 plt.axis("equal")

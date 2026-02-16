@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from qlawcol.dynamics.conversion import mee_to_keplerian
 from qlawcol.dynamics.gve import gve_mee
 from qlawcol.dynamics.scaling import R_EARTH, get_tu
-from qlawcol.qlaw.control import QLawParams, qlaw_mee
+from qlawcol.qlaw.control_kep import QLawParams, qlaw_kep
 
 
 class ODEState(NamedTuple):
@@ -21,17 +21,20 @@ class ODEArgs(NamedTuple):
     exhaust_velocity: float
     convergence_tol: float
 
+    def as_static(self):
+        return self._replace(
+            qlaw_params=self.qlaw_params.as_static(),
+        )
+
 
 def sim_control(state: ODEState, args: ODEArgs) -> jnp.ndarray:
     """Compute the control acceleration for the current state."""
     qlaw_params = args.qlaw_params._replace(
         accel_mag=args.thrust / state.mass
     )  # update accel_mag based on current mass
-    u = qlaw_mee(state.mee, qlaw_params)
-    u = (
-        u / (jnp.linalg.norm(u) + 1e-12) * args.thrust / state.mass
-    )  # convert to acceleration
-    return u
+    u = qlaw_kep(mee_to_keplerian(state.mee), qlaw_params)
+
+    return u / (jnp.linalg.norm(u) + 1e-12) * args.thrust / state.mass
 
 
 def sim_ode(t: float, state: ODEState, args: ODEArgs) -> ODEState:
@@ -47,17 +50,25 @@ def sim_ode(t: float, state: ODEState, args: ODEArgs) -> ODEState:
 
     # compute MEE derivatives
     mee_dot = A @ u + b
-    mass_dot = -args.thrust / args.exhaust_velocity  # mass loss due to thrust
+
+    # compute mass derivative
+    accel_mag = jnp.linalg.norm(u)
+    thrust_mag = accel_mag * mass
+
+    mass_dot = -thrust_mag / args.exhaust_velocity  # mass loss due to thrust
     return ODEState(mee_dot, mass_dot)
 
 
 def guidance_converged(_, state: ODEState, args: ODEArgs, **kwargs) -> bool:
     """Check if guidance has converged."""
     target = args.qlaw_params.target
-    current_mee = state.mee[:5]
+    current_kep = mee_to_keplerian(state.mee)[:5]
     weighting = jnp.where(args.qlaw_params.w_oe > 0, 1, 0)
-    error = (current_mee - target) * weighting
-    error_norm = jnp.linalg.norm(error)
+
+    error = current_kep - target
+    # wrap Omega, omega using arccos(cos()) trick
+    error = error.at[3:5].set(jnp.arccos(jnp.cos(error[3:5])))
+    error_norm = jnp.linalg.norm(error * weighting)
     return error_norm < args.convergence_tol
 
 
@@ -73,14 +84,24 @@ def crashed_into_earth(_, state: ODEState, _args, **kwargs) -> bool:
     return r < 1.0  # in nondimensional units, Earth radius is 1.0
 
 
-@jax.jit
+@jax.jit(static_argnames=["args", "t_max", "max_steps"])
 def simulate(
     initial_mee: jnp.ndarray,
     initial_mass: float,
     args: ODEArgs,
     t_max: float,
-) -> dfx.SaveAt:
+    max_steps: int = 4096,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, int]:
     """Simulate the spacecraft trajectory under the Q-law."""
+
+    # reconstruct args with arrays etc. (JIT boundary)
+    args = args._replace(
+        qlaw_params=args.qlaw_params._replace(
+            target=jnp.array(args.qlaw_params.target),
+            w_oe=jnp.array(args.qlaw_params.w_oe),
+            deadband=jnp.array(args.qlaw_params.deadband),
+        )
+    )
 
     # nondimensionalize
     lu = R_EARTH  # use Earth radius as length unit
@@ -106,8 +127,15 @@ def simulate(
 
     controller = dfx.PIDController(rtol=1e-6, atol=1e-6)
     saveat = dfx.SaveAt(steps=True)
-    term = dfx.ODETerm(sim_ode)
+    term = dfx.ODETerm(lambda t, y, _: sim_ode(t, y, args))
     solver = dfx.Tsit5()
+
+    # monkeypatch _assert_term_compatible to no-op (save compile time)
+    dfx._integrate._assert_term_compatible = lambda *args, **kwargs: ...  # noqa: SLF001, ARG005
+
+    # monkeypatch eqx error if to be no-op (remove host callback --> enable disk cache)
+    dfx._integrate.eqxi.error_if = lambda x, *args, **kwargs: x  # noqa: SLF001, ARG005
+
     sol = dfx.diffeqsolve(
         term,
         solver,
@@ -115,12 +143,16 @@ def simulate(
         t1=t_max_nd,
         dt0=1e-3,
         y0=ode_state0,
-        args=args,
         saveat=saveat,
         stepsize_controller=controller,
-        event=dfx.Event([guidance_converged, crashed_into_earth]),
-        max_steps=32768,
+        event=dfx.Event(
+            [
+                lambda t, y, _, **kwargs: guidance_converged(t, y, args),
+                lambda t, y, _, **kwargs: crashed_into_earth(t, y, args),
+            ]
+        ),
         throw=False,
+        max_steps=max_steps,
     )
 
     # postprocess to get control solutions
