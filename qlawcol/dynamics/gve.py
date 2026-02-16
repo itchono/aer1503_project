@@ -1,7 +1,8 @@
-import jax.numpy as np
+import jax.numpy as jnp
+from jax.numpy import cos, sin, sqrt, tan
 
 
-def gve_2d_mee(mee: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def gve_2d_mee(mee: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
     """
     Computes affine "matrices" A and b for the 2 dimensional
     Gauss variational equations in modified equinoctial elements (MEE).
@@ -20,28 +21,144 @@ def gve_2d_mee(mee: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
     # constructions
     p = a * (1 - f**2 - g**2)  # semi-latus rectum p = a(1 - e^2)
-    q = 1 + f * np.cos(ell) + g * np.sin(ell)
-    leading_coefficient = 1 / q * np.sqrt(p)
+    q = 1 + f * jnp.cos(ell) + g * jnp.sin(ell)
+    leading_coefficient = 1 / q * jnp.sqrt(p)
 
     # A
-    A = leading_coefficient * np.array(
+    A = leading_coefficient * jnp.array(
         [
             [
-                2 * a * q * (f * np.sin(ell) - g * np.cos(ell)) / (1 - f**2 - g**2),
+                2 * a * q * (f * jnp.sin(ell) - g * jnp.cos(ell)) / (1 - f**2 - g**2),
                 2 * a * q**2 / (1 - f**2 - g**2),
             ],
             [
-                q * np.sin(ell),
-                (q + 1) * np.cos(ell) + f,
+                q * jnp.sin(ell),
+                (q + 1) * jnp.cos(ell) + f,
             ],
             [
-                -q * np.cos(ell),
-                (q + 1) * np.sin(ell) + g,
+                -q * jnp.cos(ell),
+                (q + 1) * jnp.sin(ell) + g,
             ],
             [0, 0],
         ]
     )
 
-    b = np.array([0, 0, 0, q**2 * np.sqrt(p) / p**2])
+    b = jnp.array([0, 0, 0, q**2 * jnp.sqrt(p) / p**2])
+
+    return A, b
+
+
+def gve_kep(state: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    "Au+b" form of Gauss variational equations for Keplerian elements
+    [a e i Omega omega theta].
+
+    i.e. x_dot = A(x) * u + b(x)
+    where u is the acceleration vector in the LVLH frame.
+
+    Assumes non-dimensionalized units with mu = 1.
+
+    Parameters
+    ----------
+    state : Array
+        State vector in Keplerian elements.
+
+    Returns
+    -------
+    A : Array
+        A-matrix for Gauss variational equation.
+    b : Array
+        b-vector for Gauss variational equation.
+
+    """
+    # unpack state vector
+    a, e, i, _, omega, theta = state
+
+    # shorthand quantities
+    p = a * (1 - e**2)
+    r = p / (1 + e * cos(theta))
+    h = sqrt(p)
+
+    A = jnp.array(
+        [
+            [2 * a**2 / h * e * sin(theta), 2 * a**2 / h * p / r, 0],
+            [p * sin(theta) / h, ((p + r) * cos(theta) + r * e) / h, 0],
+            [0, 0, r * cos(theta + omega) / h],
+            [0, 0, r * sin(theta + omega) / (h * sin(i))],
+            [
+                -p / (e * h) * cos(theta),
+                (p + r) / (e * h) * sin(theta),
+                -r * sin(theta + omega) / (h * tan(i)),
+            ],
+            [1 / (e * h) * p * cos(theta), -1 / (e * h) * (p + r) * sin(theta), 0],
+        ],
+    )
+    b = jnp.array([0, 0, 0, 0, 0, h / r**2])
+
+    return A, b
+
+
+def gve_mee(state: jnp.ndarray, mu: float) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Gauss variational equation coefficients for
+    a-modified equinoctial elements under no additional perturbations.
+
+    i.e. [a f g h k L]
+
+    Parameters
+    ----------
+    state : Array
+        State vector in modified equinoctial elements.
+    mu : float
+        Gravitational parameter.
+
+    Returns
+    -------
+    A : Array
+        A-matrix for Gauss variational equation.
+    b : Array
+        b-vector for Gauss variational equation.
+
+    """
+    # unpack state vector
+    a, f, g, h, k, L = state
+
+    # convert SMA and ecc to p
+    p = a * (1 - f**2 - g**2)  # semi-latus rectum p = a(1 - e^2)
+
+    # shorthand quantities
+    q = 1 + f * cos(L) + g * sin(L)
+
+    leading_coefficient = 1 / q * sqrt(p / mu)
+
+    # A-matrix
+    A = (
+        jnp.array(
+            [
+                [
+                    2 * a * q * (f * sin(L) - g * cos(L)) / (1 - f**2 - g**2),
+                    2 * a * q**2 / (1 - f**2 - g**2),
+                    0,
+                ],
+                [
+                    q * sin(L),
+                    (q + 1) * cos(L) + f,
+                    -g * (h * sin(L) - k * cos(L)),
+                ],
+                [
+                    -q * cos(L),
+                    (q + 1) * sin(L) + g,
+                    f * (h * sin(L) - k * cos(L)),
+                ],
+                [0, 0, cos(L) / 2 * (1 + h**2 + k**2)],
+                [0, 0, sin(L) / 2 * (1 + h**2 + k**2)],
+                [0, 0, h * sin(L) - k * cos(L)],
+            ],
+        )
+        * leading_coefficient
+    )
+
+    # b-vector
+    b = jnp.array([0, 0, 0, 0, 0, q**2 * sqrt(mu * p) / p**2])
 
     return A, b

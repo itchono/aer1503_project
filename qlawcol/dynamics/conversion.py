@@ -1,6 +1,6 @@
 import jax
 import jax.numpy as jnp
-from jax.numpy import cos, sin
+from jax.numpy import arctan, arctan2, cos, sin
 
 
 def mee_to_cartesian(mee: jax.Array) -> jax.Array:
@@ -52,3 +52,57 @@ def mee_to_cartesian(mee: jax.Array) -> jax.Array:
     vel = jnp.sqrt(1 / p) / s_sq * jnp.array([vel_x, vel_y, vel_z])
 
     return jnp.concatenate([pos, vel])
+
+
+def keplerian_to_mee(kep: jax.Array) -> jax.Array:
+    """
+    Convert Keplerian elements to modified equinoctial elements.
+
+    Parameters
+    ----------
+    kep : jax.Array
+        Keplerian elements [a(m), e, i(rad), Omega(rad), omega(rad), theta(rad)].
+
+    Returns
+    -------
+    mee : Array
+        Modified equinoctial elements [a(m), f, g, h, k, L(rad)].
+
+    """
+    a, e, i, raan, aop, theta = kep
+
+    # compute the equinoctial elements
+    f = e * cos(aop + raan)
+    g = e * sin(aop + raan)
+    h = jnp.tan(i / 2) * cos(raan)
+    k = jnp.tan(i / 2) * sin(raan)
+    truelong = aop + theta + raan
+
+    return jnp.array([a, f, g, h, k, truelong])
+
+
+def mee_to_keplerian(mee: jax.Array) -> jax.Array:
+    """
+    Convert modified equinoctial elements to Keplerian elements.
+
+    Parameters
+    ----------
+    mee : jax.Array
+        Modified equinoctial elements [a(m), f, g, h, k, L(rad)].
+
+    Returns
+    -------
+    kep : Array
+        Keplerian elements [a(m), e, i(rad), Omega(rad), omega(rad), theta(rad)].
+
+    """
+    a, f, g, h, k, truelong = mee
+
+    # compute the Keplerian elements
+    e = jnp.sqrt(f**2 + g**2)
+    i = 2 * arctan(jnp.sqrt(h**2 + k**2))
+    raan = arctan2(k, h)
+    aop = arctan2(g * h - f * k, f * h + g * k)
+    theta = truelong - aop - raan
+
+    return jnp.array([a, e, i, raan, aop, theta])

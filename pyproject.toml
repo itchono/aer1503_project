@@ -9,4 +9,4 @@ version = "0.1.0"
 description = "Q-law Collocation"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = ["numpy", "matplotlib", "scipy"]
+dependencies = ["numpy", "matplotlib", "scipy", "diffrax"]
