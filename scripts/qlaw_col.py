@@ -16,25 +16,26 @@ from scipy.interpolate import CubicSpline
 
 initial_kep = jnp.array([7000e3, 0.01, jnp.radians(0.05), 0, 0, 0])
 initial_mee = keplerian_to_mee(initial_kep)
-target_orbit = jnp.array([7500e3, 0.01, 0, 0, 0])
+initial_mass = 300.0
+target_orbit = jnp.array([42000e3, 0.01, 0, 0, 0])
 qlaw_params = QLawParams(
     target=target_orbit,
     w_oe=jnp.array([1.0, 1.0, 0.0, 0.0, 0.0]),
     w_pen=0,
     rp_min=1,
     k=100,
-    eta=0.0,
+    eta=0.8,
     accel_mag=1,
 )
 ode_args = ODEArgs(
     qlaw_params=qlaw_params,
     thrust=1,  # N
     exhaust_velocity=3100 * 9.81,  # m/s
-    convergence_tol=1e-2,
+    convergence_tol=5e-2,
 )
 
 ts, mee, mass, control, result = simulate(
-    initial_mee, 300.0, ode_args.as_static(), t_max=200 * 86400, max_steps=1000
+    initial_mee, initial_mass, ode_args.as_static(), t_max=200 * 86400, max_steps=20000
 )
 print("Simulation result:", dfx.RESULTS[result])
 
@@ -68,37 +69,27 @@ def f(x: np.ndarray, u: np.ndarray):
     """
     Collocation variables
     x: (N+1, 6) array of state values at each node (6 orbital elements)
-    u: (N+1, 3) array of control values at each node (acceleration magnitude, "alpha", "beta")
-
+    u: (N+1, 3) array of control values at each node
     """
-    accel_magnitude = u[0]
-    alpha, beta = u[1], u[2]
-    accel_vec = accel_magnitude * jnp.array(
-        [
-            jnp.cos(beta) * jnp.sin(alpha),
-            jnp.cos(beta) * jnp.cos(alpha),
-            jnp.sin(beta),
-        ]
-    )
-
     A, b = gve_mee(x)
-    return A @ accel_vec + b
+    return A @ u + b
 
 
 def objective(x: np.ndarray, u: np.ndarray):
-    # integral of u^2 over time using trapezoidal rule
-    u_mag = u[:, 0]
-    return jnp.trapezoid(u_mag**2, dx=h)
+    # minimum delta-v
+    return jnp.trapezoid(jnp.linalg.norm(u, axis=1) ** 2, dx=h)
 
 
 def constraints(x: np.ndarray) -> np.ndarray:
-    # enforce BCs on a, f, g
+    # enforce BCs on state
     return jnp.array(
         [
             x[0, 0] - initial_mee[0] / LU,  # a(0) = a0
             x[0, 1] - initial_mee[1],  # f(0) = f0
             x[0, 2] - initial_mee[2],  # g(0) = g0
-            x[0, 3] - initial_mee[3],  # L(0) = L0
+            x[0, 3] - initial_mee[3],  # h(0) = L0
+            x[0, 4] - initial_mee[4],  # k(0) = h0
+            x[0, 5] - initial_mee[5],  # L(0) = k0
             x[-1, 0] - target_orbit[0] / LU,  # a(T) = af
             x[-1, 1] - target_orbit[1],  # f(T) = ff
             x[-1, 2] - target_orbit[2],  # g(T) = gf
@@ -110,19 +101,10 @@ def constraints(x: np.ndarray) -> np.ndarray:
 mee_interpolant = CubicSpline(ts, mee, axis=0)
 control_interpolant = CubicSpline(ts, control, axis=0)
 
-t_guess = jnp.linspace(0, T, N + 1) * TU
+t_guess = np.linspace(0, T, N + 1) * TU
 x_guess = mee_interpolant(t_guess)
 x_guess[:, 0] /= LU  # convert SMA to nondimensional units
-u_interp = control_interpolant(t_guess) / (LU / TU**2)
-
-# compute components of control
-u_guess = np.zeros((N + 1, 3))
-u_guess[:, 0] = np.linalg.norm(u_interp, axis=1)  # control magnitude
-u_guess[:, 1] = np.arctan2(u_interp[:, 0], u_interp[:, 1])  # alpha
-u_guess[:, 2] = np.arctan2(
-    u_interp[:, 2], np.linalg.norm(u_interp[:, :2], axis=1)
-)  # beta
-
+u_guess = control_interpolant(t_guess) / (LU / TU**2)
 
 problem_args = (
     f,
@@ -143,7 +125,7 @@ x_hist, u_hist = collocation_interpolant(t_interp)
 t_interp = t_interp * TU
 
 
-dv = np.trapezoid(u_opt[:, 0] * LU / TU**2, dx=h * TU)
+dv = np.trapezoid(np.linalg.norm(u_hist, axis=1) * LU / TU**2, t_interp)
 print(res)
 print(f"Delta-V: {dv:.2f} m/s")
 
@@ -189,18 +171,28 @@ u_qlaw_alpha = np.arctan2(u_qlaw[:, 0], u_qlaw[:, 1]) * 180 / np.pi
 u_qlaw_beta = (
     np.arctan2(u_qlaw[:, 2], np.linalg.norm(u_qlaw[:, :2], axis=1)) * 180 / np.pi
 )
-plt.plot(t_interp, u_hist[:, 0], label="Optimized (Collocation)")
+plt.plot(
+    t_interp,
+    np.linalg.norm(u_hist, axis=1) * LU / TU**2,
+    label="Optimized (Collocation)",
+)
 plt.plot(ts_plot, u_qlaw_mag, label="Initial Guess (Q-law)")
 plt.legend()
 plt.ylabel(r"$||u||$ (m/s^2)")
 
 plt.subplot(3, 1, 2)
-plt.plot(t_interp, u_hist[:, 1], label="Collocation")
+plt.plot(
+    t_interp, np.arctan2(u_hist[:, 0], u_hist[:, 1]) * 180 / np.pi, label="Collocation"
+)
 plt.plot(ts_plot, u_qlaw_alpha, label="Q-law")
 plt.ylabel(r"$\alpha$ (deg)")
 
 plt.subplot(3, 1, 3)
-plt.plot(t_interp, u_hist[:, 2], label="Collocation")
+plt.plot(
+    t_interp,
+    np.arctan2(u_hist[:, 2], np.linalg.norm(u_hist[:, :2], axis=1)) * 180 / np.pi,
+    label="Collocation",
+)
 plt.plot(ts_plot, u_qlaw_beta, label="Q-law")
 plt.ylabel(r"$\beta$ (deg)")
 plt.xlabel("t (s)")
