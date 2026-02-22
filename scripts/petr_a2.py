@@ -40,12 +40,15 @@ valid_indices = jnp.where(jnp.isfinite(ts))
 ts = ts[valid_indices]
 mee = mee[valid_indices]
 mass = mass[valid_indices]
+control = control[valid_indices]
 
 delta_v = jnp.log(mass[0] / mass[-1]) * ode_args.exhaust_velocity
+delta_v_u = jnp.trapezoid(jnp.linalg.norm(control, axis=1), ts)
 print(f"Timesteps: {len(ts)}")
 print(f"ToF: {ts[-1] / 86400:.2f} days")
 print(f"Propellant Mass Used: {mass[0] - mass[-1]:.2f} kg")
 print(f"Total delta-v expended: {delta_v:.2f} m/s")
+print(f"Total delta-v from control: {delta_v_u:.2f} m/s")
 
 
 kep = jax.vmap(mee_to_keplerian)(mee)
@@ -69,14 +72,19 @@ plt.xlabel("Time (days)")
 plt.ylabel("Semi-major Axis (km)")
 plt.subplot(2, 1, 2)
 plt.plot(ts / 86400, kep[:, 1])
-plt.axhline(target_orbit[1], color="r", linestyle="--")
+plt.axhline(target_orbit[1] * 1e-3, color="r", linestyle="--")
 plt.xlabel("Time (days)")
 plt.ylabel("Eccentricity")
 
-plt.figure()
-plt.plot(cart[:, 0] * R_EARTH, cart[:, 1] * R_EARTH)
-plt.xlabel("x (km)")
-plt.ylabel("y (km)")
+
+plt.figure(figsize=(8.75, 7))
+plt.plot(cart[:, 0] * R_EARTH * 1e-3, cart[:, 1] * R_EARTH * 1e-3, color="k", lw=0.5)
+plt.xlabel("X (km)")
+plt.ylabel("Y (km)")
 plt.axis("equal")
+# change ticks to scilimit (0, 0)
+plt.ticklabel_format(style="sci", scilimits=(0, 0), axis="both")
+
+plt.savefig("petr_a2_traj.pdf", bbox_inches="tight")
 
 plt.show()

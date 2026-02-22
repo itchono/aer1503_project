@@ -9,7 +9,7 @@ from qlawcol.dynamics.conversion import (
     mee_to_cartesian,
     mee_to_keplerian,
 )
-from qlawcol.dynamics.gve import gve_2d_mee
+from qlawcol.dynamics.gve import gve_mee
 from qlawcol.dynamics.scaling import R_EARTH, get_tu
 from qlawcol.qlaw.control import QLawParams
 from qlawcol.qlaw.sim import ODEArgs, dfx, simulate
@@ -40,13 +40,13 @@ ts, mee, mass, control, result = simulate(
 print("Simulation result:", dfx.RESULTS[result])
 
 # filter out any NaN values (in case of failure modes)
-valid_indices = jnp.where(jnp.isfinite(ts))
+valid_indices = np.where(np.isfinite(ts))
 ts = ts[valid_indices]
 mee = mee[valid_indices]
 mass = mass[valid_indices]
 control = control[valid_indices]
 
-delta_v = jnp.log(mass[0] / mass[-1]) * ode_args.exhaust_velocity
+delta_v = np.log(mass[0] / mass[-1]) * ode_args.exhaust_velocity
 print(f"Timesteps: {len(ts)}")
 print(f"ToF: {ts[-1] / 86400:.2f} days")
 print(f"Total delta-v expended: {delta_v:.2f} m/s")
@@ -56,8 +56,8 @@ kep = jax.vmap(mee_to_keplerian)(mee)
 # interpolate mees before plotting
 mee_interpolant = CubicSpline(ts, mee, axis=0)
 control_interpolant = CubicSpline(ts, control, axis=0)
-n_revs = max(mee[:, 5]) / (2 * jnp.pi)
-ts_dense = jnp.linspace(ts[0], ts[-1], int(100 * n_revs))
+n_revs = max(mee[:, 5]) / (2 * np.pi)
+ts_dense = np.linspace(ts[0], ts[-1], int(100 * n_revs))
 mee_dense_nd = mee_interpolant(ts_dense)
 mee_dense_nd[:, 0] /= R_EARTH
 
@@ -75,13 +75,36 @@ print(f"Using collocation with T={T:.2f} TU, N={N}, h={h:.4f} TU")
 
 
 def f(x: np.ndarray, u: np.ndarray):
-    A, b = gve_2d_mee(x)
-    return A @ u + b
+    """
+    Collocation variables
+    x: (N+1, 7) array of state values at each node (mass, 6 orbital elements)
+    u: (N+1, 3) array of control values at each node (acceleration magnitude, "alpha", "beta")
+
+    """
+
+    throttle = u[0]
+    accel_magnitude = (
+        throttle * ode_args.thrust / mass
+    )  # throttle position * thrust / mass
+    alpha, beta = u[1], u[2]
+    accel_vec = accel_magnitude * jnp.array(
+        [
+            jnp.cos(beta) * jnp.sin(alpha),
+            jnp.cos(beta) * jnp.cos(alpha),
+            jnp.sin(beta),
+        ]
+    )
+
+    A, b = gve_mee(x)
+    mee_dot = A @ accel_vec + b
+    mass_dot = -jnp.linalg.norm(u) * ode_args.thrust / ode_args.exhaust_velocity
+
+    return jnp.array([mass_dot, *mee_dot])
 
 
 def objective(x: np.ndarray, u: np.ndarray):
     # integral of u^2 over time using trapezoidal rule
-    return jnp.trapezoid(jnp.linalg.norm(u, axis=1), dx=h)
+    return jnp.trapezoid(jnp.linalg.norm(u, axis=1) ** 2, dx=h)
 
 
 def constraints(x: np.ndarray) -> np.ndarray:
@@ -119,7 +142,7 @@ problem_args = (
     T,
 )
 
-print(f"Initial guess objective: {objective(x_guess, u_guess):.4f}")
+print(f"Initial guess objective: {objective(x_guess, u_guess):.4e}")
 
 x_opt, u_opt, res = hs_collocation_sparse(problem_args, max_iter=1000, tol=1e-5)
 

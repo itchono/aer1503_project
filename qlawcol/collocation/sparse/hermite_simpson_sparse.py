@@ -2,75 +2,17 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pyoptsparse
+import sparsejac
 from scipy.optimize import OptimizeResult
 
-from qlawcol.collocation.col_types import Dynamics, ProblemSpec
+from qlawcol.collocation.col_types import ProblemSpec
 
-from .trapezoidal_sparse import PyOptSparseCOO, mask_to_sparse
-
-
-def hs_col_jac_sparsity(
-    N: int, nx: int, nu: int
-) -> tuple[PyOptSparseCOO, PyOptSparseCOO]:
-    """
-    construct sparsity pattern for collocation constraints
-    collocation constraints depend on x_k, x_k+1, u_k, u_k+1
-    x and u are each flattened i.e. x = [x1_0, x2_0, ..., x1_1, x2_1, ...]
-
-    the constraint jacobian wrt both will be sparse since
-    the i-th constraint depends only on xl_i, xl_i+1, ul_i, ul_i+1
-
-    General form looks like (1 for nonzero, 0 for zero):
-    [1 1 1 1 0 0 0 0 ...]
-    [1 1 1 1 0 0 0 0 ...]
-    [0 0 1 1 1 1 0 0 ...]
-    [0 0 1 1 1 1 0 0 ...]
-
-    - the width of each block is 2 nx for x and 2 nu for u
-    - the height of each block is nx (corresponding to constraint dimension)
-    """
-
-    row_idx_x = np.repeat(np.arange(N * nx), 2 * nx)
-    row_idx_u = np.repeat(np.arange(N * nx), 2 * nu)
-    col_idx_x = []
-    col_idx_u = []
-
-    jac_x_shape = [N * nx, (N + 1) * nx]
-    jac_u_shape = [N * nx, (N + 1) * nu]
-
-    for i in range(N):
-        # matrix is N * nx rows tall, so each iteration should
-        # "add nx rows". Each row within each "block" is identical.
-
-        # each "block": the nonzero indices move forward by nx and nu for each constraint
-        # we have 2 nx and 2 nu nonzeros per row, and this is repeated for each of the nx rows in the block
-        col_idx_x.extend(
-            ([i * nx + j for j in range(nx)] + [(i + 1) * nx + j for j in range(nx)])
-            * nx
-        )
-        col_idx_u.extend(
-            ([i * nu + j for j in range(nu)] + [(i + 1) * nu + j for j in range(nu)])
-            * nx
-        )
-
-    col_idx_x = np.array(col_idx_x)
-    col_idx_u = np.array(col_idx_u)
-
-    one_x = np.ones_like(row_idx_x, dtype=float)
-    one_u = np.ones_like(row_idx_u, dtype=float)
-
-    # return in PyOptSparse COO format
-    jac_x = {
-        "coo": [row_idx_x, col_idx_x, one_x],
-        "shape": jac_x_shape,
-    }
-
-    jac_u = {
-        "coo": [row_idx_u, col_idx_u, one_u],
-        "shape": jac_u_shape,
-    }
-
-    return jac_x, jac_u
+from .sparse_utils import (
+    collocation_jac_sparsity,
+    detect_sparsity_pattern,
+    jax_bcoo_to_pyoptsparse,
+    pyoptsparse_to_jax_bcoo,
+)
 
 
 def hs_collocation_sparse(
@@ -126,20 +68,19 @@ def hs_collocation_sparse(
         }
 
     # get sparsity pattern of collocation constraint jacobian for efficient optimization
-    jac_col_x_sparsity, jac_col_u_sparsity = hs_col_jac_sparsity(N, nx, nu)
+    jac_col_x_sparsity, jac_col_u_sparsity = collocation_jac_sparsity(N, nx, nu)
+
+    # convert to jax BCOO format to specify jacfwd sparsity in sparsejac
+    def col_flat(x: np.ndarray, u: np.ndarray) -> np.ndarray:
+        return collocation_constraints(x.reshape((N + 1, nx)), u.reshape((N + 1, nu)))
+
+    def addcon_flat(x: np.ndarray) -> np.ndarray:
+        return constraints(x.reshape((N + 1, nx)))
 
     # numerically probe jac of additional constraints
-    jac_add_x_sparsity = (
-        jnp.abs(jax.jacfwd(constraints, argnums=0)(x_guess)) > 1e-8
-    ).reshape(-1, len_x)
-    jac_add_x_sparsity = {
-        "coo": [
-            np.where(jac_add_x_sparsity)[0],
-            np.where(jac_add_x_sparsity)[1],
-            np.ones(np.sum(jac_add_x_sparsity)),
-        ],
-        "shape": [n_additional_constr, len_x],
-    }
+    jac_add_x_sparsity = detect_sparsity_pattern(
+        jax.jacfwd(addcon_flat, argnums=0)(x_guess.flatten())
+    )
 
     @jax.jit
     def sens(xdict: dict[str, jnp.ndarray], _):
@@ -149,20 +90,32 @@ def hs_collocation_sparse(
         # for minimum energy, we assume obj only has grad wrt u
         jac_obj_u = jax.grad(cost, argnums=1)(x, u).flatten()
 
+        with jax.ensure_compile_time_eval():
+            jccx_fn = sparsejac.jacfwd(
+                col_flat,
+                argnums=0,
+                sparsity=pyoptsparse_to_jax_bcoo(jac_col_x_sparsity),
+            )
+            jccu_fn = sparsejac.jacfwd(
+                col_flat,
+                argnums=1,
+                sparsity=pyoptsparse_to_jax_bcoo(jac_col_u_sparsity),
+            )
+            jadd_fn = sparsejac.jacfwd(
+                addcon_flat,
+                argnums=0,
+                sparsity=pyoptsparse_to_jax_bcoo(jac_add_x_sparsity),
+            )
+
         # collocation constraints
-        # jacobians are always taller than wide so jacfwd is more efficient
-        jac_colcon_x = jax.jacfwd(collocation_constraints, argnums=0)(x, u).reshape(
-            -1, len_x
-        )
-        jac_colcon_u = jax.jacfwd(collocation_constraints, argnums=1)(x, u).reshape(
-            -1, len_u
-        )
-        jac_add_x = jax.jacfwd(constraints, argnums=0)(x).reshape(-1, len_x)
+        jac_colcon_x = jccx_fn(x.flatten(), u.flatten())
+        jac_colcon_u = jccu_fn(x.flatten(), u.flatten())
+        jac_add_x = jadd_fn(x.flatten())
 
         # apply sparsity pattern to all jacobians
-        jac_colcon_x = mask_to_sparse(jac_col_x_sparsity, jac_colcon_x)
-        jac_colcon_u = mask_to_sparse(jac_col_u_sparsity, jac_colcon_u)
-        jac_addcon_x = mask_to_sparse(jac_add_x_sparsity, jac_add_x)
+        jac_colcon_x = jax_bcoo_to_pyoptsparse(jac_colcon_x)
+        jac_colcon_u = jax_bcoo_to_pyoptsparse(jac_colcon_u)
+        jac_addcon_x = jax_bcoo_to_pyoptsparse(jac_add_x)
 
         return {
             "obj": {"u": jac_obj_u},
