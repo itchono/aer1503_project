@@ -27,11 +27,11 @@ ode_args = ODEArgs(
     qlaw_params=qlaw_params,
     thrust=1,  # N
     exhaust_velocity=3100 * 9.81,  # m/s
-    convergence_tol=5e-2,
+    convergence_tol=6e-2,
 )
 
 ts, mee, mass, control, result = simulate(
-    initial_mee, 300.0, ode_args.as_static(), t_max=200 * 86400, max_steps=1000
+    initial_mee, 300.0, ode_args.as_static(), t_max=20 * 86400, max_steps=1000
 )
 print("Simulation result:", dfx.RESULTS[result])
 

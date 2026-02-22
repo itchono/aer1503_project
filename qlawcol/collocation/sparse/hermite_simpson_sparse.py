@@ -52,8 +52,8 @@ def hs_collocation_sparse(
         f_c = f_vec(x_c, u_c)
 
         # collocation condition
-        x_nxt = x[:-1] + h / 6 * (f_k + 4 * f_c + f_k_plus_1)
-        return (x[1:] - x_nxt).flatten() / h  # scaling by h to improve conditioning
+        defect = (x[1:] - x[:-1]) / h - (1 / 6) * (f_k + 4 * f_c + f_k_plus_1)
+        return defect.flatten()
 
     @jax.jit
     def objective_and_cons(xdict: dict[str, jnp.ndarray]) -> dict[str, jnp.ndarray]:

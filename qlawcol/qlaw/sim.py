@@ -106,9 +106,10 @@ def simulate(
     # nondimensionalize
     lu = R_EARTH  # use Earth radius as length unit
     tu = get_tu(lu)  # compute time unit
+    massu = initial_mass  # use initial mass as mass unit
 
     t_max_nd = t_max / tu  # nondimensionalize max time
-    thrust_nd = args.thrust * tu**2 / lu  # nondimensionalize thrust
+    thrust_nd = args.thrust * tu**2 / lu / massu  # nondimensionalize thrust
     ve_nd = args.exhaust_velocity * tu / lu  # nondimensionalize exhaust velocity
     args = args._replace(
         thrust=thrust_nd,
@@ -121,6 +122,7 @@ def simulate(
     )
 
     initial_mee = initial_mee.at[0].divide(lu)  # nondimensionalize SMA
+    initial_mass = initial_mass / massu  # nondimensionalize mass
 
     # set up ODE solver
     ode_state0 = ODEState(initial_mee, initial_mass)
@@ -161,7 +163,7 @@ def simulate(
     # rescale solution
     ts = sol.ts * tu  # rescale time
     mee = sol.ys.mee.at[:, 0].multiply(lu)  # rescale MEE (only SMA needs rescaling)
-    mass = sol.ys.mass  # mass is already in physical units
+    mass = sol.ys.mass * massu  # rescale mass to physical units
     result = sol.result
     u = u * lu / tu**2  # rescale control to physical units
 

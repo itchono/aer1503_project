@@ -20,14 +20,14 @@ qlaw_params = QLawParams(
     w_pen=0,
     rp_min=1,
     k=100,
-    eta=0.945,
+    eta=0.948,
     accel_mag=1,
 )
 ode_args = ODEArgs(
     qlaw_params=qlaw_params,
     thrust=1,  # N
     exhaust_velocity=3100 * 9.81,  # m/s
-    convergence_tol=5e-2,
+    convergence_tol=6e-2,
 )
 
 ts, mee, mass, control, result = simulate(

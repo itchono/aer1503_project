@@ -7,7 +7,6 @@ from qlawcol.collocation import hs_collocation_sparse, hs_interpolant
 from qlawcol.dynamics.conversion import (
     keplerian_to_mee,
     mee_to_cartesian,
-    mee_to_keplerian,
 )
 from qlawcol.dynamics.gve import gve_mee
 from qlawcol.dynamics.scaling import R_EARTH, get_tu
@@ -17,7 +16,7 @@ from scipy.interpolate import CubicSpline
 
 initial_kep = jnp.array([7000e3, 0.01, jnp.radians(0.05), 0, 0, 0])
 initial_mee = keplerian_to_mee(initial_kep)
-target_orbit = jnp.array([42000e3, 0.01, 0, 0, 0])
+target_orbit = jnp.array([7500e3, 0.01, 0, 0, 0])
 qlaw_params = QLawParams(
     target=target_orbit,
     w_oe=jnp.array([1.0, 1.0, 0.0, 0.0, 0.0]),
@@ -30,8 +29,8 @@ qlaw_params = QLawParams(
 ode_args = ODEArgs(
     qlaw_params=qlaw_params,
     thrust=1,  # N
-    exhaust_velocity=1e10,  # infinite ISP
-    convergence_tol=5e-2,
+    exhaust_velocity=3100 * 9.81,  # m/s
+    convergence_tol=1e-2,
 )
 
 ts, mee, mass, control, result = simulate(
@@ -47,21 +46,12 @@ mass = mass[valid_indices]
 control = control[valid_indices]
 
 delta_v = np.log(mass[0] / mass[-1]) * ode_args.exhaust_velocity
+n_revs = max(mee[:, 5]) / (2 * np.pi)
 print(f"Timesteps: {len(ts)}")
 print(f"ToF: {ts[-1] / 86400:.2f} days")
 print(f"Total delta-v expended: {delta_v:.2f} m/s")
+print(f"Number of revolutions: {n_revs:.2f}")
 
-kep = jax.vmap(mee_to_keplerian)(mee)
-
-# interpolate mees before plotting
-mee_interpolant = CubicSpline(ts, mee, axis=0)
-control_interpolant = CubicSpline(ts, control, axis=0)
-n_revs = max(mee[:, 5]) / (2 * np.pi)
-ts_dense = np.linspace(ts[0], ts[-1], int(100 * n_revs))
-mee_dense_nd = mee_interpolant(ts_dense)
-mee_dense_nd[:, 0] /= R_EARTH
-
-cart = jax.vmap(mee_to_cartesian)(mee_dense_nd)
 
 # begin collocation
 LU = 7000e3
@@ -77,15 +67,11 @@ print(f"Using collocation with T={T:.2f} TU, N={N}, h={h:.4f} TU")
 def f(x: np.ndarray, u: np.ndarray):
     """
     Collocation variables
-    x: (N+1, 7) array of state values at each node (mass, 6 orbital elements)
+    x: (N+1, 6) array of state values at each node (6 orbital elements)
     u: (N+1, 3) array of control values at each node (acceleration magnitude, "alpha", "beta")
 
     """
-
-    throttle = u[0]
-    accel_magnitude = (
-        throttle * ode_args.thrust / mass
-    )  # throttle position * thrust / mass
+    accel_magnitude = u[0]
     alpha, beta = u[1], u[2]
     accel_vec = accel_magnitude * jnp.array(
         [
@@ -96,15 +82,13 @@ def f(x: np.ndarray, u: np.ndarray):
     )
 
     A, b = gve_mee(x)
-    mee_dot = A @ accel_vec + b
-    mass_dot = -jnp.linalg.norm(u) * ode_args.thrust / ode_args.exhaust_velocity
-
-    return jnp.array([mass_dot, *mee_dot])
+    return A @ accel_vec + b
 
 
 def objective(x: np.ndarray, u: np.ndarray):
     # integral of u^2 over time using trapezoidal rule
-    return jnp.trapezoid(jnp.linalg.norm(u, axis=1) ** 2, dx=h)
+    u_mag = u[:, 0]
+    return jnp.trapezoid(u_mag**2, dx=h)
 
 
 def constraints(x: np.ndarray) -> np.ndarray:
@@ -122,17 +106,23 @@ def constraints(x: np.ndarray) -> np.ndarray:
     )
 
 
-# initial guess: linear orbital element change, T/TU rads of true
-t_guess = jnp.linspace(0, T, N + 1)
+# interpolate mees for initial guess
+mee_interpolant = CubicSpline(ts, mee, axis=0)
+control_interpolant = CubicSpline(ts, control, axis=0)
 
-x_guess = mee_interpolant(t_guess * TU)[
-    :,
-    (0, 1, 2, 5),
-]
+t_guess = jnp.linspace(0, T, N + 1) * TU
+x_guess = mee_interpolant(t_guess)
 x_guess[:, 0] /= LU  # convert SMA to nondimensional units
-u_guess = control_interpolant(t_guess * TU)[:, (0, 1)] / (
-    LU / TU**2
-)  # convert back to nondimensional control
+u_interp = control_interpolant(t_guess) / (LU / TU**2)
+
+# compute components of control
+u_guess = np.zeros((N + 1, 3))
+u_guess[:, 0] = np.linalg.norm(u_interp, axis=1)  # control magnitude
+u_guess[:, 1] = np.arctan2(u_interp[:, 0], u_interp[:, 1])  # alpha
+u_guess[:, 2] = np.arctan2(
+    u_interp[:, 2], np.linalg.norm(u_interp[:, :2], axis=1)
+)  # beta
+
 
 problem_args = (
     f,
@@ -147,61 +137,79 @@ print(f"Initial guess objective: {objective(x_guess, u_guess):.4e}")
 x_opt, u_opt, res = hs_collocation_sparse(problem_args, max_iter=1000, tol=1e-5)
 
 # interpolate state
-mee_interpolant = hs_interpolant(x_opt, u_opt, T, f)
+collocation_interpolant = hs_interpolant(x_opt, u_opt, T, f)
 t_interp = np.linspace(0, T, N * 10)
-x_hist, u_hist = mee_interpolant(t_interp)
+x_hist, u_hist = collocation_interpolant(t_interp)
 t_interp = t_interp * TU
 
 
-dv = np.trapezoid(jnp.linalg.norm(u_opt, axis=1) * LU / TU**2, dx=h * TU)
+dv = np.trapezoid(u_opt[:, 0] * LU / TU**2, dx=h * TU)
 print(res)
 print(f"Delta-V: {dv:.2f} m/s")
 
 plt.style.use("qlawcol.clean_plot")
 
+ts_plot = np.linspace(0, T, int(n_revs * 100)) * TU
+mee_dense = mee_interpolant(ts_plot)
+
 # plot orbital elements
 plt.figure(figsize=(9, 8))
-plt.subplot(3, 1, 1)
+plt.subplot(5, 1, 1)
 plt.plot(t_interp, x_hist[:, 0] * LU, label="Collocation")
-plt.plot(ts_dense, mee_dense_nd[:, 0] * R_EARTH, label="Q-law")
+plt.plot(ts_plot, mee_dense[:, 0], label="Q-law")
 plt.legend()
 plt.ylabel("a")
-plt.subplot(3, 1, 2)
+plt.subplot(5, 1, 2)
 plt.plot(t_interp, x_hist[:, 1], label="Collocation")
-plt.plot(ts_dense, mee_dense_nd[:, 1], label="Q-law")
+plt.plot(ts_plot, mee_dense[:, 1], label="Q-law")
 plt.ylabel("f")
-plt.subplot(3, 1, 3)
+plt.subplot(5, 1, 3)
 plt.plot(t_interp, x_hist[:, 2], label="Collocation")
-plt.plot(ts_dense, mee_dense_nd[:, 2], label="Q-law")
+plt.plot(ts_plot, mee_dense[:, 2], label="Q-law")
 plt.ylabel("g")
+plt.subplot(5, 1, 4)
+plt.plot(t_interp, x_hist[:, 3], label="Collocation")
+plt.plot(ts_plot, mee_dense[:, 3], label="Q-law")
+plt.ylabel("h")
+plt.subplot(5, 1, 5)
+plt.plot(t_interp, x_hist[:, 4], label="Collocation")
+plt.plot(ts_plot, mee_dense[:, 4], label="Q-law")
+plt.ylabel("k")
+
 plt.xlabel("t (s)")
 
 
 # plot controls
 plt.figure(figsize=(9, 4))
-plt.subplot(2, 1, 1)
+plt.subplot(3, 1, 1)
 
-u_mag = np.linalg.norm(u_hist, axis=1) * LU / TU**2
-u_qlaw = control_interpolant(ts_dense)[:, (0, 1)] * LU / TU**2
+u_qlaw = control_interpolant(ts_plot)
 u_qlaw_mag = np.linalg.norm(u_qlaw, axis=1)
-u_qlaw_dir = np.arctan2(u_qlaw[:, 1], u_qlaw[:, 0]) * 180 / np.pi - 90
-plt.plot(t_interp, u_mag, label="Optimized (Collocation)")
-plt.plot(ts_dense, u_qlaw_mag, label="Initial Guess (Q-law)")
+u_qlaw_alpha = np.arctan2(u_qlaw[:, 0], u_qlaw[:, 1]) * 180 / np.pi
+u_qlaw_beta = (
+    np.arctan2(u_qlaw[:, 2], np.linalg.norm(u_qlaw[:, :2], axis=1)) * 180 / np.pi
+)
+plt.plot(t_interp, u_hist[:, 0], label="Optimized (Collocation)")
+plt.plot(ts_plot, u_qlaw_mag, label="Initial Guess (Q-law)")
 plt.legend()
-plt.ylabel("Control Magnitude (m/s^2)")
+plt.ylabel(r"$||u||$ (m/s^2)")
 
-u_dir = np.arctan2(u_hist[:, 1], u_hist[:, 0]) * 180 / np.pi - 90  # convert to degrees
-plt.subplot(2, 1, 2)
-plt.plot(t_interp, u_dir, label="Collocation")
-plt.plot(ts_dense, u_qlaw_dir, label="Q-law")
-plt.ylabel("Control Direction (deg)")
+plt.subplot(3, 1, 2)
+plt.plot(t_interp, u_hist[:, 1], label="Collocation")
+plt.plot(ts_plot, u_qlaw_alpha, label="Q-law")
+plt.ylabel(r"$\alpha$ (deg)")
 
+plt.subplot(3, 1, 3)
+plt.plot(t_interp, u_hist[:, 2], label="Collocation")
+plt.plot(ts_plot, u_qlaw_beta, label="Q-law")
+plt.ylabel(r"$\beta$ (deg)")
 plt.xlabel("t (s)")
 
 # plot trajectory in Cartesian space
 mee_array = np.zeros((x_hist.shape[0], 6))
 mee_array[:, :3] = x_hist[:, :3]
 mee_array[:, -1] = x_hist[:, -1]
+
 
 cart_array = jax.vmap(mee_to_cartesian)(mee_array)
 plt.figure(figsize=(6, 6))
