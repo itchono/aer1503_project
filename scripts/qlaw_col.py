@@ -7,6 +7,7 @@ from qlawcol.collocation import hs_collocation_sparse, hs_interpolant
 from qlawcol.dynamics.conversion import (
     keplerian_to_mee,
     mee_to_cartesian,
+    mee_to_keplerian,
 )
 from qlawcol.dynamics.gve import gve_mee
 from qlawcol.dynamics.scaling import R_EARTH, get_tu
@@ -16,7 +17,7 @@ from scipy.interpolate import CubicSpline
 
 initial_kep = jnp.array([24505.9e3, 0.725, jnp.radians(7.05), 0, 0, 0])
 initial_mee = keplerian_to_mee(initial_kep)
-initial_mass = 300.0
+initial_mass = 2000.0
 target_orbit = jnp.array([42165e3, 0.001, jnp.radians(0.05), 0, 0])
 qlaw_params = QLawParams(
     target=target_orbit,
@@ -24,12 +25,12 @@ qlaw_params = QLawParams(
     w_pen=0,
     rp_min=1,
     k=100,
-    eta=0.0,
+    eta=0.2,
     accel_mag=1,
 )
 ode_args = ODEArgs(
     qlaw_params=qlaw_params,
-    thrust=0.35,  # N
+    thrust=5,  # N
     exhaust_velocity=2000 * 9.81,  # m/s
     convergence_tol=5e-3,
 )
@@ -60,7 +61,7 @@ TU = get_tu(LU)
 MASSU = initial_mass
 
 T = max(ts) / TU
-N = int(n_revs * 6)  # number of intervals per orbit
+N = int(n_revs * 35)  # number of intervals per orbit
 h = T / N
 thrust_nd = ode_args.thrust / (MASSU * LU / TU**2)
 vex_nd = ode_args.exhaust_velocity / (LU / TU)
@@ -90,8 +91,8 @@ def f(x: np.ndarray, u: np.ndarray):
 
 def objective(x: np.ndarray, u: np.ndarray):
     # compute delta-vs
-
-    return -x[-1, 6]  # maximize final mass
+    accel = u[:, 0] * thrust_nd / x[:, 6]
+    return jnp.trapezoid(accel**2, dx=h)
 
 
 def constraints(x: np.ndarray) -> np.ndarray:
@@ -105,9 +106,9 @@ def constraints(x: np.ndarray) -> np.ndarray:
             x[0, 4] - initial_mee[4],  # k(0) = h0
             x[0, 5] - initial_mee[5],  # L(0) = k0
             x[0, 6] - initial_mass / MASSU,  # m(0) = m0
-            x[-1, 0] - target_orbit[0] / LU,  # a(T) = af
-            x[-1, 1] - target_orbit[1],  # f(T) = ff
-            x[-1, 2] - target_orbit[2],  # g(T) = gf
+            x[-1, 0] - target_orbit[0] / LU,  # a(T) = at
+            mee_to_keplerian(x[-1, :6])[1] - target_orbit[1],  # e(T) = et
+            mee_to_keplerian(x[-1, :6])[2] - target_orbit[2],  # i(T) = it
         ]
     )
 
@@ -135,7 +136,9 @@ u_interp = control_interpolant(t_guess) / (LU / TU**2)
 
 u_guess = np.zeros((N + 1, 4))
 u_guess[:, 0] = 1.0  # full throttle
-u_guess[:, 1:] = u_interp / np.linalg.norm(u_interp[:, 1:3], axis=1, keepdims=True)
+u_guess[:, 1:] = u_interp / (
+    np.linalg.norm(u_interp[:, 1:3], axis=1, keepdims=True) + 1e-8
+)
 
 problem_args = (
     f,
@@ -147,7 +150,13 @@ problem_args = (
 
 print(f"Initial guess objective: {objective(x_guess, u_guess):.4e}")
 
-x_opt, u_opt, res = hs_collocation_sparse(problem_args, max_iter=1000, tol=1e-6)
+x_opt, u_opt, res = hs_collocation_sparse(
+    problem_args,
+    max_iter=500,
+    tol=1e-8,
+    limited_memory_max_history=20,
+    nlp_scaling_method="gradient-based",
+)
 
 # interpolate state
 collocation_interpolant = hs_interpolant(x_opt, u_opt, T, f)
@@ -158,6 +167,12 @@ t_interp = t_interp * TU
 
 dv = np.log(x_opt[0, 6] / x_opt[-1, 6]) * ode_args.exhaust_velocity
 print(f"Delta-V: {dv:.2f} m/s")
+
+dv_accel_based = (
+    np.trapezoid(u_opt[:, 0] * thrust_nd / x_opt[:, 6], dx=h)
+    * ode_args.exhaust_velocity
+)
+print(f"Delta-V (accel-based): {dv_accel_based:.2f} m/s")
 
 plt.style.use("qlawcol.clean_plot")
 
