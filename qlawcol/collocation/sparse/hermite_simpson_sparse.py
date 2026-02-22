@@ -89,6 +89,7 @@ def hs_collocation_sparse(
 
         # for minimum energy, we assume obj only has grad wrt u
         jac_obj_u = jax.grad(cost, argnums=1)(x, u).flatten()
+        jac_obj_x = jax.grad(cost, argnums=0)(x, u).flatten()
 
         with jax.ensure_compile_time_eval():
             jccx_fn = sparsejac.jacfwd(
@@ -118,14 +119,49 @@ def hs_collocation_sparse(
         jac_addcon_x = jax_bcoo_to_pyoptsparse(jac_add_x)
 
         return {
-            "obj": {"u": jac_obj_u},
+            "obj": {"u": jac_obj_u, "x": jac_obj_x},
             "collocation_constr": {"x": jac_colcon_x, "u": jac_colcon_u},
             "additional_constr": {"x": jac_addcon_x},
         }
 
     opt_prob = pyoptsparse.Optimization("orbit_transfer_hs", objective_and_cons)
-    opt_prob.addVarGroup("x", len_x, value=x_guess.flatten())
-    opt_prob.addVarGroup("u", len_u, value=u_guess.flatten())
+
+    # bound state
+    a_lb = np.zeros(N + 1)  # SMA must be positive
+    a_ub = (
+        np.ones(N + 1) * 20
+    )  # some large number to effectively have no upper bound on SMA
+    f_lb = np.ones(N + 1) * -0.99  # f can be in [-1, 1]
+    f_ub = np.ones(N + 1) * 0.99
+    g_lb = np.ones(N + 1) * -0.99  # g can be in [-1, 1]
+    g_ub = np.ones(N + 1) * 0.99
+    h_lb = np.ones(N + 1) * -10
+    h_ub = (
+        np.ones(N + 1) * 10
+    )  # h can be large, but we set some bounds to help optimization
+    k_lb = np.ones(N + 1) * -10
+    k_ub = (
+        np.ones(N + 1) * 10
+    )  # k can be large, but we set some bounds to help optimization
+    L_lb = np.ones(N + 1) * -np.inf
+    L_ub = np.ones(N + 1) * np.inf
+    mass_lb = np.zeros(N + 1)  # mass must be positive
+    mass_ub = np.ones(N + 1) * 1  # mass cannot exceed initial mass
+
+    x_lb = np.column_stack((a_lb, f_lb, g_lb, h_lb, k_lb, L_lb, mass_lb)).flatten()
+    x_ub = np.column_stack((a_ub, f_ub, g_ub, h_ub, k_ub, L_ub, mass_ub)).flatten()
+
+    opt_prob.addVarGroup("x", len_x, value=x_guess.flatten(), lower=x_lb, upper=x_ub)
+
+    # bound control
+    u_lb0 = np.zeros(N + 1)
+    u_ub0 = np.ones(N + 1) * 1.0  # assume max throttle is 1.0
+    u_lb123 = np.ones(N + 1) * -1  # direction vector can have components in [-1, 1]
+    u_ub123 = np.ones(N + 1) * 1
+    u_lb = np.column_stack((u_lb0, u_lb123, u_lb123, u_lb123)).flatten()
+    u_ub = np.column_stack((u_ub0, u_ub123, u_ub123, u_ub123)).flatten()
+
+    opt_prob.addVarGroup("u", len_u, value=u_guess.flatten(), lower=u_lb, upper=u_ub)
 
     opt_prob.addConGroup(
         "collocation_constr",
