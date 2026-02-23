@@ -191,6 +191,7 @@ def collocate(
     problem_args = (f, objective, constraints, (state_guess, col_guess.control), T / TU)
 
     print(f"Collocation will use {N} segments and {(N + 1) * 10} variables.")
+    print(f"Initial objective value: {objective(state_guess, col_guess.control):.4e}")
 
     x_opt, u_opt, res = hs_collocation_sparse(problem_args, **collocation_kwargs)
 

@@ -16,11 +16,11 @@ problem_data = ProblemData(
     thrust=10,
     exhaust_velocity=2000 * 9.81,
     ode_maxsteps=2048,
-    col_segments_per_rev=35,
+    col_segments_per_rev=25,
     qlaw_tol=5e-3,
 )
 casename = "case_b"
-res = optimize_transfer(problem_data, max_iter=1200)
+res = optimize_transfer(problem_data, max_iter=2000)
 
 # save solution to file
 col_sol = res.collocation

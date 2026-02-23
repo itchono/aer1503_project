@@ -154,7 +154,7 @@ def hs_collocation_sparse(
 
     # bound control
     u_lb0 = np.zeros(N + 1)
-    u_ub0 = np.ones(N + 1) * 2.0  # assume max throttle is 1.0
+    u_ub0 = np.ones(N + 1) * 1.0  # assume max throttle is 1.0
     u_lb12 = np.ones(N + 1) * -np.pi
     u_ub12 = np.ones(N + 1) * np.pi
     u_lb = np.column_stack((u_lb0, u_lb12, u_lb12)).flatten()

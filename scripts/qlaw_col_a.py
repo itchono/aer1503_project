@@ -20,7 +20,7 @@ problem_data = ProblemData(
     qlaw_tol=5e-3,
 )
 casename = "case_a"
-res = optimize_transfer(problem_data, max_iter=500)
+res = optimize_transfer(problem_data, max_iter=1000)
 
 # save solution to file
 col_sol = res.collocation
