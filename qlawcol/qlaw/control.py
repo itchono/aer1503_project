@@ -9,11 +9,11 @@ from qlawcol.dynamics.gve import gve_kep
 class QLawParams(NamedTuple):
     target: jnp.ndarray
     w_oe: jnp.ndarray
-    w_pen: float
-    accel_mag: float
-    rp_min: float
-    k: float
-    eta: float
+    w_pen: float = 0.0
+    rp_min: float = 1.0
+    k: float = 100.0
+    eta: float = 0.0
+    accel_mag: float = None
     deadband: jnp.ndarray = jnp.zeros(5)
     m: int = 3
     n: int = 4
@@ -64,7 +64,7 @@ def oexx_kep(kep: jnp.ndarray, f: float) -> jnp.ndarray:
 
 
 def proximity_quotient(state: jnp.ndarray, params: QLawParams) -> float:
-    target, w_oe, w_p, accel_mag, rp_min, k, eta, deadband, m, n, r = params
+    target, w_oe, w_p, rp_min, k, eta, accel_mag, deadband, m, n, r = params
 
     dx = state[:5] - target[:5]
     # wrap Omega, omega using arccos(cos()) trick

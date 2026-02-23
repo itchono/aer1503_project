@@ -128,7 +128,7 @@ def simulate(
     ode_state0 = ODEState(initial_mee, initial_mass)
 
     controller = dfx.PIDController(rtol=1e-6, atol=1e-6)
-    saveat = dfx.SaveAt(steps=True)
+    saveat = dfx.SaveAt(t0=True, steps=True)
     term = dfx.ODETerm(lambda t, y, _: sim_ode(t, y, args))
     solver = dfx.Tsit5()
 
@@ -166,5 +166,6 @@ def simulate(
     mass = sol.ys.mass * massu  # rescale mass to physical units
     result = sol.result
     u = u * lu / tu**2  # rescale control to physical units
+    success = sol.event_mask[0]
 
-    return ts, mee, mass, u, result
+    return ts, mee, mass, u, result, success

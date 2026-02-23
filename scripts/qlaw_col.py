@@ -25,8 +25,7 @@ qlaw_params = QLawParams(
     w_pen=0,
     rp_min=1,
     k=100,
-    eta=0.2,
-    accel_mag=1,
+    eta=0.6,
 )
 ode_args = ODEArgs(
     qlaw_params=qlaw_params,

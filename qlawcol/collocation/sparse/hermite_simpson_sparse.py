@@ -180,7 +180,7 @@ def hs_collocation_sparse(
     )
 
     opt_prob.addObj("obj")
-
+    print("Optimization problem setup complete. Starting optimization...")
     opt = pyoptsparse.IPOPT(options=optimizer_options)
     result = opt(opt_prob, sens=sens)
 
