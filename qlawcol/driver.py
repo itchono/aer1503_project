@@ -130,7 +130,7 @@ def collocate(
 
         thrust_mag = throttle * thrust_nd
 
-        thrust_vec = thrust_mag * direction / jnp.linalg.norm(direction + 1e-12)
+        thrust_vec = thrust_mag * direction / jnp.linalg.norm(direction + 1e-8)
         accel_vec = thrust_vec / mass
 
         A, b = gve_mee(mee)

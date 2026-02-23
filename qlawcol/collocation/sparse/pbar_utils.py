@@ -1,3 +1,4 @@
+import time
 from contextlib import contextmanager
 from threading import Thread
 
@@ -27,19 +28,24 @@ def ipopt_pbar_from_file(
     pbar = tqdm(desc=desc, total=max_iter)
     stop_thread = False
 
+    # create a dummy file if it doesn't exist
+    with open(fname, "a") as f:
+        pass
+
     def update_pbar():
         with open(fname, "r") as f:
+            last_line = ""
             while not stop_thread:
-                f.seek(0)
-                # read last line of file
-                lines = f.readlines()
-                if len(lines) < 2:
+                line = f.readline()
+                if not line:
+                    time.sleep(0.1)  # Sleep briefly to avoid busy-waiting
                     continue
-                last_line = lines[-1]
+                last_line = line
+
                 if last_line.startswith("iter"):
                     continue
                 parts = last_line.split()
-                if len(parts) < 2:
+                if len(parts) < 3:
                     continue
                 try:
                     iter_num = int(parts[0])
@@ -55,7 +61,7 @@ def ipopt_pbar_from_file(
                         }
                     )
                     pbar.refresh()
-                except ValueError:
+                except (ValueError, IndexError):
                     continue
 
     thread = Thread(target=update_pbar)

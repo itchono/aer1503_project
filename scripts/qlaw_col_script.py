@@ -23,7 +23,7 @@ problem_data = ProblemData(
 )
 
 
-res = optimize_transfer(problem_data, max_iter=5000)
+res = optimize_transfer(problem_data, max_iter=500)
 
 col_sol = res.collocation
 qlaw_sol = res.qlaw
