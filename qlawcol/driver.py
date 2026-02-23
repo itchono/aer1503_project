@@ -77,7 +77,7 @@ def generate_initial_guess_for_collocation(
     ts_nd = sol_q.ts / TU
     mee_nd = sol_q.mee / np.array([LU, 1, 1, 1, 1, 1])
     mass_nd = sol_q.mass / MASSU
-    control_nd = sol_q.control * (LU / TU**2)
+    control_nd = sol_q.control / (LU / TU**2)
 
     # stack arrays for interpolation (simple linear interpolation)
     f_stacked = np.hstack((mee_nd, mass_nd[:, None], control_nd))
@@ -93,11 +93,15 @@ def generate_initial_guess_for_collocation(
     control_guess = f_guess[:, 7:]
 
     # change control arrays to required format (throttle + direction)
-    throttle_guess = np.ones_like(control_guess[:, 0])  # full throttle
-    control_dir_guess = control_guess / (
-        np.linalg.norm(control_guess, axis=1, keepdims=True) + 1e-12
+    thrust_max_nd = problem_data.thrust / (MASSU * LU / TU**2)
+    thrust_guess = np.linalg.norm(control_guess, axis=1) * mass_guess
+    throttle_guess = thrust_guess / thrust_max_nd
+    alpha_guess = np.arctan2(control_guess[:, 0], control_guess[:, 1])
+    beta_guess = np.arctan2(
+        control_guess[:, 2],
+        np.linalg.norm(control_guess[:, :2], axis=1),
     )
-    control_guess = np.hstack((throttle_guess[:, None], control_dir_guess))
+    control_guess = np.column_stack((throttle_guess, alpha_guess, beta_guess))
 
     traj_guess_nd = Trajectory(
         ts=ts_col, mee=mee_guess, mass=mass_guess, control=control_guess
@@ -111,12 +115,15 @@ def collocate(
     col_params: CollocationParams,
     **collocation_kwargs,
 ) -> tuple[Trajectory, str]:
+    """
+    Take an initial guess for collocation and run the optimization,
+    returning the optimized trajectory.
+    """
     initial_mee = keplerian_to_mee(problem_data.initial_kep)
 
     N, T, LU, TU, MASSU = col_params
     thrust_nd = problem_data.thrust / (MASSU * LU / TU**2)
     vex_nd = problem_data.exhaust_velocity / (LU / TU)
-    h = T / N / TU  # nondimensional timestep
 
     def f(x: np.ndarray, u: np.ndarray):
         """
@@ -126,11 +133,19 @@ def collocate(
         """
         mee, mass = x[:6], x[6]
 
-        throttle, direction = u[0], u[1:]
+        throttle, alpha, beta = u
 
         thrust_mag = throttle * thrust_nd
 
-        thrust_vec = thrust_mag * direction / jnp.linalg.norm(direction + 1e-8)
+        direction = jnp.array(
+            [
+                jnp.cos(beta) * jnp.sin(alpha),
+                jnp.cos(beta) * jnp.cos(alpha),
+                jnp.sin(beta),
+            ]
+        )
+
+        thrust_vec = thrust_mag * direction
         accel_vec = thrust_vec / mass
 
         A, b = gve_mee(mee)
@@ -198,7 +213,12 @@ def collocate(
     mee_col = np.array(x_hist[:, :6])
     mee_col[:, 0] *= LU  # convert SMA back to dimensional units
     throttle_col = u_hist[:, 0]
-    direction_col = u_hist[:, 1:] / np.linalg.norm(u_hist[:, 1:], axis=1, keepdims=True)
+    alpha = u_hist[:, 1]
+    beta = u_hist[:, 2]
+    direction_col = np.column_stack(
+        (np.cos(beta) * np.sin(alpha), np.cos(beta) * np.cos(alpha), np.sin(beta))
+    )
+
     control_col = (
         throttle_col[:, None]
         * direction_col
@@ -211,6 +231,9 @@ def collocate(
 
 
 def optimize_transfer(problem_data: ProblemData, **collocation_kwargs) -> Result:
+    """
+    Optimize an orbital transfer using a Q-law solution as an initial guess for collocation.
+    """
     # simulate with Q-law
     ode_args = ODEArgs(
         qlaw_params=problem_data.qlaw_params.as_static(),
@@ -227,7 +250,10 @@ def optimize_transfer(problem_data: ProblemData, **collocation_kwargs) -> Result
         t_max=problem_data.t_max,
         max_steps=problem_data.ode_maxsteps,
     )
-    print(f"Q-law simulation result: {dfx.RESULTS[result]}, success: {success}")
+    if success:
+        print("Q-law converged!")
+    else:
+        print(f"Q-law did NOT converge: {dfx.RESULTS[result]}")
 
     # filter out any NaN values (in case of failure modes)
     valid_indices = np.where(np.isfinite(ts_q))

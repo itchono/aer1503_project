@@ -3,7 +3,6 @@ import jax.numpy as jnp
 import numpy as np
 import pyoptsparse
 import sparsejac
-from scipy.optimize import OptimizeResult
 
 from qlawcol.collocation.col_types import ProblemSpec
 
@@ -19,7 +18,7 @@ from .sparse_utils import (
 def hs_collocation_sparse(
     problem: ProblemSpec,
     **optimizer_options,
-) -> tuple[np.ndarray, np.ndarray, OptimizeResult]:
+) -> tuple[np.ndarray, np.ndarray, str]:
     """
     Performs trajectory optimization using Hermite-Simpson collocation with pyOptSparse and IPOPT.
     """
@@ -88,8 +87,7 @@ def hs_collocation_sparse(
         x = xdict["x"].reshape((N + 1, nx))
         u = xdict["u"].reshape((N + 1, nu))
 
-        # for minimum energy, we assume obj only has grad wrt u
-        jac_obj_u = jax.grad(cost, argnums=1)(x, u).flatten()
+        # for minimum energy, we assume obj only has grad wrt x (final mass)
         jac_obj_x = jax.grad(cost, argnums=0)(x, u).flatten()
 
         with jax.ensure_compile_time_eval():
@@ -120,7 +118,7 @@ def hs_collocation_sparse(
         jac_addcon_x = jax_bcoo_to_pyoptsparse(jac_add_x)
 
         return {
-            "obj": {"u": jac_obj_u, "x": jac_obj_x},
+            "obj": {"x": jac_obj_x},
             "collocation_constr": {"x": jac_colcon_x, "u": jac_colcon_u},
             "additional_constr": {"x": jac_addcon_x},
         }
@@ -157,10 +155,10 @@ def hs_collocation_sparse(
     # bound control
     u_lb0 = np.zeros(N + 1)
     u_ub0 = np.ones(N + 1) * 2.0  # assume max throttle is 1.0
-    u_lb123 = np.ones(N + 1) * -1  # direction vector can have components in [-1, 1]
-    u_ub123 = np.ones(N + 1) * 1
-    u_lb = np.column_stack((u_lb0, u_lb123, u_lb123, u_lb123)).flatten()
-    u_ub = np.column_stack((u_ub0, u_ub123, u_ub123, u_ub123)).flatten()
+    u_lb12 = np.ones(N + 1) * -np.pi
+    u_ub12 = np.ones(N + 1) * np.pi
+    u_lb = np.column_stack((u_lb0, u_lb12, u_lb12)).flatten()
+    u_ub = np.column_stack((u_ub0, u_ub12, u_ub12)).flatten()
 
     opt_prob.addVarGroup("u", len_u, value=u_guess.flatten(), lower=u_lb, upper=u_ub)
 
@@ -181,8 +179,8 @@ def hs_collocation_sparse(
     )
 
     opt_prob.addObj("obj")
+    opt = pyoptsparse.IPOPT(options=optimizer_options)
     with ipopt_pbar_from_file(max_iter=optimizer_options.get("max_iter", 1000)):
-        opt = pyoptsparse.IPOPT(options=optimizer_options)
         result = opt(opt_prob, sens=sens)
 
     x_opt = result.xStar["x"].reshape((N + 1, nx))

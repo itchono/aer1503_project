@@ -12,7 +12,7 @@ problem_data = ProblemData(
     qlaw_params=QLawParams(
         target=np.array([42000e3, 0.01, np.radians(0.01), 0, 0]),
         w_oe=np.array([1.0, 1.0, 0.0, 0.0, 0.0]),
-        eta=0.8,
+        eta=0.1,
     ),
     t_max=100 * 86400,
     thrust=10,
