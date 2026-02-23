@@ -155,9 +155,7 @@ def collocate(
         return jnp.array([*mee_dot, mass_dot])
 
     def objective(x: np.ndarray, u: np.ndarray):
-        # compute delta-vs
-        # accel = u[:, 0] / x[:, 6]
-        # return jnp.trapezoid(accel**2, dx=h)
+        # maximize final mass = minimize delta-v
         return -x[-1, 6]
 
     def constraints(x: np.ndarray) -> np.ndarray:
@@ -190,16 +188,9 @@ def collocate(
         return jnp.concatenate((ic_constraints, jnp.array(extras_list)))
 
     state_guess = np.hstack((col_guess.mee, col_guess.mass[:, None]))
+    problem_args = (f, objective, constraints, (state_guess, col_guess.control), T / TU)
 
-    problem_args = (
-        f,
-        objective,
-        constraints,
-        (state_guess, col_guess.control),
-        T / TU,
-    )
-
-    print(f"Initial guess objective: {objective(state_guess, col_guess.control):.4e}")
+    print(f"Collocation will use {N} segments and {(N + 1) * 10} variables.")
 
     x_opt, u_opt, res = hs_collocation_sparse(problem_args, **collocation_kwargs)
 
@@ -250,17 +241,17 @@ def optimize_transfer(problem_data: ProblemData, **collocation_kwargs) -> Result
         t_max=problem_data.t_max,
         max_steps=problem_data.ode_maxsteps,
     )
-    if success:
-        print("Q-law converged!")
-    else:
-        print(f"Q-law did NOT converge: {dfx.RESULTS[result]}")
-
     # filter out any NaN values (in case of failure modes)
     valid_indices = np.where(np.isfinite(ts_q))
     ts_q = ts_q[valid_indices]
     mee_q = mee_q[valid_indices]
     mass_q = mass_q[valid_indices]
     control_q = control_q[valid_indices]
+
+    if success:
+        print(f"Q-law converged: {len(ts_q)} steps, ToF = {ts_q[-1] / 86400:.2f} d")
+    else:
+        print(f"Q-law did NOT converge: {dfx.RESULTS[result]}")
 
     q_solution = Trajectory(ts_q, mee_q, mass_q, control_q)
 

@@ -123,7 +123,7 @@ def hs_collocation_sparse(
             "additional_constr": {"x": jac_addcon_x},
         }
 
-    opt_prob = pyoptsparse.Optimization("orbit_transfer_hs", objective_and_cons)
+    opt_prob = pyoptsparse.Optimization("collocation", objective_and_cons)
 
     # bound state
     a_lb = np.zeros(N + 1)  # SMA must be positive
