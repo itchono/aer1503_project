@@ -31,6 +31,16 @@ class Trajectory(NamedTuple):
     mass: np.ndarray
     control: np.ndarray
 
+    def dump_to_file(self, fname: str):
+        np.savez(fname, ts=self.ts, mee=self.mee, mass=self.mass, control=self.control)
+
+    @staticmethod
+    def load_from_file(fname: str) -> "Trajectory":
+        data = np.load(fname)
+        return Trajectory(
+            ts=data["ts"], mee=data["mee"], mass=data["mass"], control=data["control"]
+        )
+
 
 class CollocationParams(NamedTuple):
     N: int
@@ -118,21 +128,22 @@ def collocate(
 
         throttle, direction = u[0], u[1:]
 
-        thrust_vec = (
-            throttle * thrust_nd * direction / jnp.linalg.norm(direction + 1e-8)
-        )
+        thrust_mag = throttle * thrust_nd
+
+        thrust_vec = thrust_mag * direction / jnp.linalg.norm(direction + 1e-12)
         accel_vec = thrust_vec / mass
 
         A, b = gve_mee(mee)
 
         mee_dot = A @ accel_vec + b
-        mass_dot = -thrust_nd / vex_nd
+        mass_dot = -thrust_mag / vex_nd
         return jnp.array([*mee_dot, mass_dot])
 
     def objective(x: np.ndarray, u: np.ndarray):
         # compute delta-vs
-        accel = u[:, 0] / x[:, 6]
-        return jnp.trapezoid(accel**2, dx=h)
+        # accel = u[:, 0] / x[:, 6]
+        # return jnp.trapezoid(accel**2, dx=h)
+        return -x[-1, 6]
 
     def constraints(x: np.ndarray) -> np.ndarray:
         # enforce BCs on state

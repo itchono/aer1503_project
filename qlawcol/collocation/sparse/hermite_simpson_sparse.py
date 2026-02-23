@@ -7,6 +7,7 @@ from scipy.optimize import OptimizeResult
 
 from qlawcol.collocation.col_types import ProblemSpec
 
+from .pbar_utils import ipopt_pbar_from_file
 from .sparse_utils import (
     collocation_jac_sparsity,
     detect_sparsity_pattern,
@@ -180,9 +181,9 @@ def hs_collocation_sparse(
     )
 
     opt_prob.addObj("obj")
-    print("Optimization problem setup complete. Starting optimization...")
-    opt = pyoptsparse.IPOPT(options=optimizer_options)
-    result = opt(opt_prob, sens=sens)
+    with ipopt_pbar_from_file(max_iter=optimizer_options.get("max_iter", 1000)):
+        opt = pyoptsparse.IPOPT(options=optimizer_options)
+        result = opt(opt_prob, sens=sens)
 
     x_opt = result.xStar["x"].reshape((N + 1, nx))
     u_opt = result.xStar["u"].reshape((N + 1, nu))

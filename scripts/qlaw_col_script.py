@@ -10,15 +10,15 @@ problem_data = ProblemData(
     initial_kep=np.array([7000e3, 0.01, np.radians(0.01), 0, 0, 0]),
     initial_mass=300.0,
     qlaw_params=QLawParams(
-        target=np.array([20000e3, 0.3, np.radians(30), 1.57, 1.57]),
-        w_oe=np.array([1.0, 1.0, 1.0, 1.0, 1.0]),
-        eta=0.0,
+        target=np.array([20000e3, 0.3, np.radians(0.01), 0, 0]),
+        w_oe=np.array([1.0, 1.0, 0.0, 0.0, 0.0]),
+        eta=0.8,
     ),
     t_max=100 * 86400,
-    thrust=1,
+    thrust=10,
     exhaust_velocity=3000 * 9.81,
-    ode_maxsteps=32768,
-    col_segments_per_rev=10,
+    ode_maxsteps=16384,
+    col_segments_per_rev=30,
     qlaw_tol=5e-3,
 )
 
@@ -27,6 +27,10 @@ res = optimize_transfer(problem_data, max_iter=5000)
 
 col_sol = res.collocation
 qlaw_sol = res.qlaw
+
+# save to file
+col_sol.dump_to_file("col_sol.npz")
+qlaw_sol.dump_to_file("qlaw_sol.npz")
 
 
 dv_col = np.log(col_sol.mass[0] / col_sol.mass[-1]) * problem_data.exhaust_velocity
@@ -61,6 +65,14 @@ plt.plot(col_sol.ts, col_sol.mee[:, 4], label="Collocation")
 plt.plot(qlaw_sol.ts, qlaw_sol.mee[:, 4], label="Q-law")
 plt.ylabel("$k$")
 
+plt.xlabel("$t$ (s)")
+
+# plot mass
+plt.figure(figsize=(9, 4))
+plt.plot(col_sol.ts, col_sol.mass, label="Collocation")
+plt.plot(qlaw_sol.ts, qlaw_sol.mass, label="Q-law")
+plt.legend()
+plt.ylabel("Mass (kg)")
 plt.xlabel("$t$ (s)")
 
 

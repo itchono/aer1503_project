@@ -78,13 +78,15 @@ def f(x: np.ndarray, u: np.ndarray):
 
     throttle, direction = u[0], u[1:]
 
-    thrust_vec = throttle * thrust_nd * direction / jnp.linalg.norm(direction + 1e-8)
+    thrust_mag = throttle * thrust_nd
+
+    thrust_vec = thrust_mag * direction / jnp.linalg.norm(direction + 1e-12)
     accel_vec = thrust_vec / mass
 
     A, b = gve_mee(mee)
 
     mee_dot = A @ accel_vec + b
-    mass_dot = -thrust_nd / vex_nd
+    mass_dot = -thrust_mag / vex_nd
     return jnp.array([*mee_dot, mass_dot])
 
 
