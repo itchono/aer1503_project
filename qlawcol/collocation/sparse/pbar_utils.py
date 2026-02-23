@@ -28,8 +28,8 @@ def ipopt_pbar_from_file(
     pbar = tqdm(desc=desc, total=max_iter)
     stop_thread = False
 
-    # create a dummy file if it doesn't exist
-    with open(fname, "a") as f:
+    # create a dummy file if it doesn't exist, and clear it if it does exist
+    with open(fname, "w") as f:
         pass
 
     def update_pbar():

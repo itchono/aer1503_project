@@ -10,7 +10,7 @@ problem_data = ProblemData(
     initial_kep=np.array([7000e3, 0.01, np.radians(0.01), 0, 0, 0]),
     initial_mass=300.0,
     qlaw_params=QLawParams(
-        target=np.array([20000e3, 0.3, np.radians(0.01), 0, 0]),
+        target=np.array([42000e3, 0.01, np.radians(0.01), 0, 0]),
         w_oe=np.array([1.0, 1.0, 0.0, 0.0, 0.0]),
         eta=0.8,
     ),
