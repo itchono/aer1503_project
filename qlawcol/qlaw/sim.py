@@ -92,9 +92,40 @@ def simulate(
     t_max: float,
     max_steps: int = 4096,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, int]:
-    """Simulate the spacecraft trajectory under the Q-law."""
+    """
+    Simulate the spacecraft trajectory under the Q-law.
 
-    # reconstruct args with arrays etc. (JIT boundary)
+    Parameters
+    ----------
+    initial_mee: array
+        Initial mean equinoctial elements, in nondimensionalized units (i.e. SMA should be divided by Earth radius).
+    initial_mass: float
+        Initial mass of the spacecraft, in kg.
+    args: ODEArgs
+        Arguments for the ODE function, including Q-law parameters and physical parameters.
+    t_max: float
+        Maximum simulation time, in seconds.
+    max_steps: int
+        Maximum number of integration steps.
+
+    Returns
+    -------
+    ts: array
+        Time points of the simulation, in seconds.
+    mees: array
+        Mean equinoctial elements at each time point, in dimensional units.
+    mass: array
+        Mass of the spacecraft at each time point, in kg.
+    control: array
+        Control acceleration at each time point in the LVLH frame, in m/s^2.
+    result: Enum
+        ODE solver result code
+    success: bool
+        Whether the simulation ended due to successful convergence (True) or due to hitting max time/steps or crashing into Earth (False).
+
+    """
+
+    # reconstruct args with arrays etc. (for JIT compatibility)
     args = args._replace(
         qlaw_params=args.qlaw_params._replace(
             target=jnp.array(args.qlaw_params.target),
@@ -103,7 +134,7 @@ def simulate(
         )
     )
 
-    # nondimensionalize
+    # nondimensionalize initial conditions and parameters
     lu = R_EARTH  # use Earth radius as length unit
     tu = get_tu(lu)  # compute time unit
     massu = initial_mass  # use initial mass as mass unit
@@ -131,12 +162,6 @@ def simulate(
     saveat = dfx.SaveAt(t0=True, steps=True)
     term = dfx.ODETerm(lambda t, y, _: sim_ode(t, y, args))
     solver = dfx.Tsit5()
-
-    # monkeypatch _assert_term_compatible to no-op (save compile time)
-    dfx._integrate._assert_term_compatible = lambda *args, **kwargs: ...  # noqa: SLF001, ARG005
-
-    # monkeypatch eqx error if to be no-op (remove host callback --> enable disk cache)
-    dfx._integrate.eqxi.error_if = lambda x, *args, **kwargs: x  # noqa: SLF001, ARG005
 
     sol = dfx.diffeqsolve(
         term,

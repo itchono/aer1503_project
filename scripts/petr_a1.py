@@ -30,10 +30,11 @@ ode_args = ODEArgs(
     convergence_tol=6e-2,
 )
 
-ts, mee, mass, control, result = simulate(
+ts, mee, mass, control, result, success = simulate(
     initial_mee, 300.0, ode_args.as_static(), t_max=20 * 86400, max_steps=1000
 )
 print("Simulation result:", dfx.RESULTS[result])
+print("Simulation success:", success)
 
 # filter out any NaN values (in case of failure modes)
 valid_indices = jnp.where(jnp.isfinite(ts))
@@ -43,13 +44,10 @@ mass = mass[valid_indices]
 control = control[valid_indices]
 
 delta_v = jnp.log(mass[0] / mass[-1]) * ode_args.exhaust_velocity
-delta_v_u = jnp.trapezoid(jnp.linalg.norm(control, axis=1), ts)
 print(f"Timesteps: {len(ts)}")
 print(f"ToF: {ts[-1] / 86400:.2f} days")
 print(f"Propellant Mass Used: {mass[0] - mass[-1]:.2f} kg")
 print(f"Total delta-v expended: {delta_v:.2f} m/s")
-print(f"Total delta-v from control: {delta_v_u:.2f} m/s")
-
 
 kep = jax.vmap(mee_to_keplerian)(mee)
 

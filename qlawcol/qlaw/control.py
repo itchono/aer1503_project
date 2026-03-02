@@ -10,11 +10,11 @@ class QLawParams(NamedTuple):
     target: jnp.ndarray
     w_oe: jnp.ndarray
     w_pen: float = 0.0
-    rp_min: float = 1.0
+    rp_min: float = 1.0  # nondimensionalized by Earth radius
     k: float = 100.0
     eta: float = 0.0
     accel_mag: float = None
-    deadband: jnp.ndarray = jnp.zeros(5)
+    deadband: jnp.ndarray = jnp.zeros(5)  # extra deadband, added in the EQ-law (2017)
     m: int = 3
     n: int = 4
     r: int = 2
@@ -28,6 +28,23 @@ class QLawParams(NamedTuple):
 
 
 def oexx_kep(kep: jnp.ndarray, f: float) -> jnp.ndarray:
+    """
+    Maximum rates of change per orbital element over the course of an orbit.
+
+    Parameters
+    ----------
+    kep: array
+        Keplerian elements [a, e, i, Omega, omega, theta].
+        a should be expressed in nondimensionalized units (i.e. divided by Earth radius).
+    f: float
+        Maximum acceleration magnitude, expressed in nondimensionalized units.
+
+    Returns
+    -------
+    oexx: array
+        Maximum rates of change per orbital element, in the same order as kep.
+        Time unit is nondimensional.
+    """
     a, e, i, _, omega, _ = kep
 
     p = a * (1 - e**2)
@@ -64,6 +81,23 @@ def oexx_kep(kep: jnp.ndarray, f: float) -> jnp.ndarray:
 
 
 def proximity_quotient(state: jnp.ndarray, params: QLawParams) -> float:
+    """
+    The Q function from the Q-law paper.
+
+    Parameters
+    ----------
+    state: array
+        State vector, consisting of [a, e, i, Omega, omega, theta].
+        a should be expressed in nondimensionalized units (i.e. divided by Earth radius).
+    params: QLawParams
+        Parameters for the Q-law.
+
+    Returns
+    -------
+    float
+        The proximity quotient whose Lie derivative we seek to make as
+        negative as possible on each timestep.
+    """
     target, w_oe, w_p, rp_min, k, eta, accel_mag, deadband, m, n, r = params
 
     dx = state[:5] - target[:5]
@@ -85,6 +119,25 @@ def proximity_quotient(state: jnp.ndarray, params: QLawParams) -> float:
 
 
 def qdot_at_theta(theta: float, state: jnp.ndarray, params: QLawParams) -> jnp.ndarray:
+    """
+    Compute the Lie derivative of the proximity quotient at a given true anomaly.
+    Helper function for determine when to cut off thrust.
+
+    Parameters
+    ----------
+    theta: float
+        True anomaly at which to evaluate qdot.
+    state: array
+        State vector, consisting of [a, e, i, Omega, omega, theta].
+        a should be expressed in nondimensionalized units (i.e. divided by Earth radius).
+    params: QLawParams
+        Parameters for the Q-law.
+
+    Returns
+    -------
+    float
+        The Lie derivative of the proximity quotient at the given true anomaly.
+    """
     state = state.at[-1].set(theta)
     G = gve_kep(state)[0]
     grad_q = jax.grad(proximity_quotient)(state, params)
@@ -95,6 +148,26 @@ def qdot_at_theta(theta: float, state: jnp.ndarray, params: QLawParams) -> jnp.n
 
 
 def qdot_nn_gss(state: jnp.ndarray, params: QLawParams, tol: float = 1e-6) -> float:
+    """
+    Find the most negative value of \dot{Q} over the course of an orbit, using the golden section search method.
+
+    Note that the original Q-law paper uses a grid search instead of GSS.
+
+    Parameters
+    ----------
+    state: array
+        State vector, consisting of [a, e, i, Omega, omega, theta].
+        a should be expressed in nondimensionalized units (i.e. divided by Earth radius).
+    params: QLawParams
+        Parameters for the Q-law.
+    tol: float
+        Tolerance for convergence of the golden section search.
+
+    Returns
+    -------
+    float
+        The most negative value of \dot{Q} over the course of an orbit.
+    """
     # find minimum qdot
 
     # Golden ratio
@@ -128,13 +201,32 @@ def qdot_nn_gss(state: jnp.ndarray, params: QLawParams, tol: float = 1e-6) -> fl
 
 
 def qlaw(state: jnp.ndarray, params: QLawParams) -> jnp.ndarray:
+    """
+    Compute the Q-law control acceleration for a given state and Q-law parameters.
+
+    Parameters
+    ----------
+    state: array
+        State vector, consisting of [a, e, i, Omega, omega, theta].
+        a should be expressed in nondimensionalized units (i.e. divided by Earth radius).
+    params: QLawParams
+        Parameters for the Q-law.
+
+    Returns
+    -------
+    control: array
+        Control acceleration in the LVLH frame, expressed in nondimensionalized
+        units
+    """
     G = gve_kep(state)[0]
     grad_q = jax.grad(proximity_quotient)(state, params)
     # treat NaN or inf in grad_q as zero (i.e. if gradient is undefined, apply no control)
     grad_q = jnp.where(jnp.isfinite(grad_q), grad_q, 0)
 
+    # "LgV control: guarantees maximum possible decrease in Q"
     u = -G.T @ grad_q
 
+    # Cutoff decision
     qdot_n = qdot_at_theta(state[-1], state, params)
     qdot_nn = qdot_nn_gss(state, params)
     eta_curr = qdot_n / qdot_nn
