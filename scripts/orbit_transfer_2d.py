@@ -3,12 +3,7 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Circle
-from qlawcol.collocation import (
-    hs_collocation_dense,
-    hs_interpolant,
-    trapezoidal_collocation_dense,
-    trapezoidal_interpolant,
-)
+from qlawcol.collocation import dense_collocation, hs_interpolant
 from qlawcol.collocation.initial_guess import linear_sma_guess
 from qlawcol.dynamics.conversion import mee_to_cartesian
 from qlawcol.dynamics.gve import gve_2d_mee
@@ -23,12 +18,6 @@ nu = 2  # [fr, ft]
 
 LU = 8000e3
 TU = get_tu(LU)
-
-col_strategy = hs_collocation_dense
-interp_strategy = {
-    hs_collocation_dense: hs_interpolant,
-    trapezoidal_collocation_dense: trapezoidal_interpolant,
-}[col_strategy]
 
 
 mee_start = np.array([1.0, 0.0, 0.0, 0.0])
@@ -73,10 +62,10 @@ problem_args = (
     T,
 )
 
-x_opt, u_opt, res = col_strategy(problem_args, maxiter=1000, ftol=1e-9)
+x_opt, u_opt, res = dense_collocation(problem_args, maxiter=1000, ftol=1e-9)
 
 # interpolate state
-interpolant = interp_strategy(x_opt, u_opt, T, f)
+interpolant = hs_interpolant(x_opt, u_opt, T, f)
 t_interp = np.linspace(0, T, N * 5)
 x_hist, u_hist = interpolant(t_interp)
 t_interp = t_interp * TU

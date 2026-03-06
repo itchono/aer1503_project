@@ -6,6 +6,7 @@ import sparsejac
 
 from qlawcol.collocation.col_types import ProblemSpec
 
+from ..constraints import hermite_simpson
 from .pbar_utils import ipopt_pbar_from_file
 from .sparse_utils import (
     collocation_jac_sparsity,
@@ -15,12 +16,13 @@ from .sparse_utils import (
 )
 
 
-def hs_collocation_sparse(
+def sparse_collocation(
     problem: ProblemSpec,
+    constraint_func=hermite_simpson,
     **optimizer_options,
 ) -> tuple[np.ndarray, np.ndarray, str]:
     """
-    Performs trajectory optimization using Hermite-Simpson collocation with pyOptSparse and IPOPT.
+    Performs trajectory optimization using sparse collocation with pyOptSparse and IPOPT.
     """
     # unpack and infer problem parameters
     f, cost, constraints, guess, T = problem
@@ -38,22 +40,7 @@ def hs_collocation_sparse(
     h: float = T / N  # time step
 
     # constraints: collocation constraints + additional user-defined constraints
-    @jax.jit
-    def collocation_constraints(x: jnp.ndarray, u: jnp.ndarray) -> jnp.ndarray:
-        f_vec = jax.vmap(f, in_axes=(0, 0))
-
-        f_eval = f_vec(x, u)
-        f_k = f_eval[:-1]
-        f_k_plus_1 = f_eval[1:]
-
-        # get midpoints
-        x_c = (x[:-1] + x[1:]) / 2 + (h / 8) * (f_k - f_k_plus_1)
-        u_c = (u[:-1] + u[1:]) / 2
-        f_c = f_vec(x_c, u_c)
-
-        # collocation condition
-        defect = (x[1:] - x[:-1]) / h - (1 / 6) * (f_k + 4 * f_c + f_k_plus_1)
-        return defect.flatten()
+    collocation_constraints = jax.jit(lambda x, u: constraint_func(x, u, h, f))
 
     @jax.jit
     def objective_and_cons(xdict: dict[str, jnp.ndarray]) -> dict[str, jnp.ndarray]:

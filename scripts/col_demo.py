@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
-from qlawcol.collocation import trapezoidal_collocation_dense
+from qlawcol.collocation import dense_collocation, trapezoidal
 
 T = 1.0  # final time
 N = 40  # number of intervals
@@ -51,7 +51,9 @@ problem_args = (
 )
 slsqp_kwargs = {"options": {"maxiter": 1000, "ftol": 1e-9}}
 
-x_opt, u_opt, res = trapezoidal_collocation_dense(problem_args, **slsqp_kwargs)
+x_opt, u_opt, res = dense_collocation(
+    problem_args, constraint_func=trapezoidal, **slsqp_kwargs
+)
 
 
 print("Success:", res.success)

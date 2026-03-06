@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from qlawcol.collocation import hs_collocation_sparse, hs_interpolant
+from qlawcol.collocation import hs_interpolant, sparse_collocation
 from qlawcol.dynamics.conversion import keplerian_to_mee, mee_to_keplerian
 from qlawcol.dynamics.gve import gve_mee
 from qlawcol.dynamics.scaling import get_tu
@@ -193,7 +193,7 @@ def collocate(
     print(f"Collocation will use {N} segments and {(N + 1) * 10} variables.")
     print(f"Initial objective value: {objective(state_guess, col_guess.control):.4e}")
 
-    x_opt, u_opt, res = hs_collocation_sparse(problem_args, **collocation_kwargs)
+    x_opt, u_opt, res = sparse_collocation(problem_args, **collocation_kwargs)
 
     collocation_interpolant = hs_interpolant(x_opt, u_opt, T / TU, f)
     t_interp = np.linspace(0, T / TU, N * 10)

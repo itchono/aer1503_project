@@ -6,13 +6,16 @@ from tqdm import tqdm
 
 from qlawcol.collocation.col_types import ProblemSpec
 
+from .constraints import hermite_simpson
 
-def trapezoidal_collocation_dense(
+
+def dense_collocation(
     problem: ProblemSpec,
+    constraint_func=hermite_simpson,
     **minimize_options,
 ) -> tuple[np.ndarray, np.ndarray, OptimizeResult]:
     """
-    Performs trajectory optimization using trapezoidal collocation with SciPy's SLSQP.
+    Performs trajectory optimization using Hermite-Simpson collocation.
     """
     # unpack and infer problem parameters
     f, cost, constraints, guess, T = problem
@@ -40,17 +43,7 @@ def trapezoidal_collocation_dense(
     @jax.jit
     def combined_constraints(z: jnp.ndarray) -> jnp.ndarray:
         x, u = unpack(z)
-        f_vec = jax.vmap(f, in_axes=(0, 0))
-
-        f_eval = f_vec(x, u)
-        f_k = f_eval[:-1]
-        f_k_plus_1 = f_eval[1:]
-
-        # Trapezoidal collocation on interior points
-        x_nxt = x[:-1] + h / 2 * (f_k + f_k_plus_1)
-        collocation_conds = (
-            x[1:] - x_nxt
-        ).flatten() / h  # scaling by h to improve conditioning
+        collocation_conds = constraint_func(x, u, h, f)
 
         return jnp.concatenate([collocation_conds, constraints(x)])
 
