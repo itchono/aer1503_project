@@ -1,147 +1,70 @@
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
 import numpy as np
+from qlawcol.collocation.dense import lgl_collocation
 from qlawcol.collocation.interpolants import lgl_interpolant
-from qlawcol.collocation.lgl_utils import (
-    lgl_differentiation_matrix,
-    lgl_nodes,
-    lgl_weights,
-)
-from scipy.optimize import minimize
+from qlawcol.collocation.lgl_utils import lgl_nodes, lgl_weights
 
-# -------------------------------------------------------
-# Problem definition
-# -------------------------------------------------------
-
-nx = 2
-nu = 1
-t0 = 0
-tf = 1
-
-
-def dynamics(x, u):
-    return np.array([x[1], u[0]])
-
-
-# -------------------------------------------------------
-# Build collocation problem
-# -------------------------------------------------------
-
-N = 20  # number of segments
+T = 1.0  # final time
+N = 10  # number of intervals
 
 tau = lgl_nodes(N)
 w = lgl_weights(N, tau)
-D = lgl_differentiation_matrix(N, tau)
 
-# -------------------------------------------------------
-# Helper unpack
-# -------------------------------------------------------
+nx = 2  # [r, v]
+nu = 1  # [u]
 
-
-def unpack(z):
-    X = z[: (N + 1) * nx].reshape((N + 1, nx))
-    U = z[(N + 1) * nx :].reshape((N + 1, nu))
-
-    return X, U
+r0, v0 = 0.0, 0.0
+rf, vf = 1.0, 0.0
 
 
-# -------------------------------------------------------
-# Objective
-# -------------------------------------------------------
+def objective(x, u):
+    cost = np.sum(w * (u[:, 0] ** 2))
+
+    return (T - 0) / 2 * cost
 
 
-def objective(z):
-    X, U = unpack(z)
-
-    cost = np.sum(w * (U[:, 0] ** 2))
-
-    return (tf - t0) / 2 * cost
+def f(x: jnp.ndarray, u: jnp.ndarray):
+    r, v = x
+    return jnp.array([v, u[0]])
 
 
-# -------------------------------------------------------
-# Collocation constraints
-# -------------------------------------------------------
+def constraints(x: jnp.ndarray) -> jnp.ndarray:
+    # enforce boundary conditions
+    return jnp.array(
+        [
+            x[0, 0] - r0,  # r(0) = r0
+            x[0, 1] - v0,  # v(0) = v0
+            x[-1, 0] - rf,  # r(T) = rf
+            x[-1, 1] - vf,  # v(T) = vf
+        ]
+    )
 
 
-def collocation_constraints(z):
-    X, U = unpack(z)
+x_guess = np.zeros((N + 1, nx))
+x_guess[:, 0] = np.linspace(r0, rf, N + 1)  # linear position guess
+x_guess[:, 1] = 0.0
 
-    DX = D @ X
+u_guess = np.ones((N + 1, nu)) * 1e-6
 
-    con = []
-
-    for i in range(N + 1):
-        f = dynamics(X[i], U[i])
-
-        defect = DX[i] - (tf - t0) / 2 * f
-
-        con.extend(defect)
-
-    return np.array(con)
-
-
-# -------------------------------------------------------
-# Boundary conditions
-# -------------------------------------------------------
-
-
-def boundary_constraints(z):
-    X, U = unpack(z)
-
-    con = []
-
-    con.extend(X[0] - np.array([0, 0]))
-    con.extend(X[-1] - np.array([1, 0]))
-
-    return np.array(con)
-
-
-# -------------------------------------------------------
-# Initial guess
-# -------------------------------------------------------
-
-X_guess = np.zeros((N + 1, nx))
-U_guess = np.zeros((N + 1, nu))
-
-X_guess[:, 0] = np.linspace(0, 1, N + 1)
-
-z0 = np.concatenate([X_guess.flatten(), U_guess.flatten()])
-
-
-# -------------------------------------------------------
-# Build constraint list
-# -------------------------------------------------------
-
-cons = []
-
-cons.append({"type": "eq", "fun": collocation_constraints})
-
-cons.append({"type": "eq", "fun": boundary_constraints})
-
-
-# -------------------------------------------------------
-# Solve
-# -------------------------------------------------------
-
-sol = minimize(
+problem_args = (
+    f,
     objective,
-    z0,
-    constraints=cons,
-    method="SLSQP",
-    options={"ftol": 1e-9, "maxiter": 1000, "disp": True},
+    constraints,
+    (x_guess, u_guess),
+    T,
 )
 
 
-X, U = unpack(sol.x)
+x_opt, u_opt, res = lgl_collocation(problem_args)
 
-print("Solved cost:", objective(sol.x))
+print("Success:", res.success)
+print("Cost:", res.fun)
+print(res)
 
-# -------------------------------------------------------
-# Plotting
-# -------------------------------------------------------
-import matplotlib.pyplot as plt
+interpolant = lgl_interpolant(x_opt, u_opt, T, tau)
 
-interpolant = lgl_interpolant(X, U, tf, tau)
-
-t = np.linspace(0, 1, 100)
+t = np.linspace(0, T, 100)
 
 x_interp, u_interp = interpolant(t)
 
