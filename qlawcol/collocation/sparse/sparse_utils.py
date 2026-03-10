@@ -1,10 +1,6 @@
-import jax
 import jax.numpy as jnp
 import numpy as np
-import pyoptsparse
 from jax.experimental.sparse import BCOO
-
-from qlawcol.collocation.col_types import ProblemSpec
 
 PyOptSparseCOO = dict[str, list[float] | list[int]]
 # mat = {'coo':[row, col, data], 'shape':[nrow, ncols]}

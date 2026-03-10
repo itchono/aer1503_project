@@ -94,37 +94,12 @@ def qdot_at_theta(theta: float, state: jnp.ndarray, params: QLawParams) -> jnp.n
     return -(jnp.linalg.norm(G.T @ grad_q) * accel_mag)
 
 
-def qdot_nn_gss(state: jnp.ndarray, params: QLawParams, tol: float = 1e-6) -> float:
-    # find minimum qdot
-
-    # Golden ratio
-    phi = (1 + jnp.sqrt(5)) / 2
-    res = 2 - phi  # reciprocal of golden ratio
-
-    a = -jnp.pi
-    b = jnp.pi
-
-    def wh_body(val):
-        a, b = val
-
-        c = a + res * (b - a)
-        d = b - res * (b - a)
-
-        qdot_c = qdot_at_theta(c, state, params)
-        qdot_d = qdot_at_theta(d, state, params)
-
-        return jax.lax.cond(
-            qdot_c < qdot_d,
-            lambda: (a, d),
-            lambda: (c, b),
-        )
-
-    def wh_cond(val):
-        a, b = val
-        return (b - a) > tol
-
-    a, b = jax.lax.while_loop(wh_cond, wh_body, (a, b))
-    return qdot_at_theta((a + b) / 2, state, params)
+def qdot_nn(state: jnp.ndarray, params: QLawParams) -> float:
+    theta_stencil = jnp.linspace(-jnp.pi, jnp.pi, 100)
+    qdot_stencil = jax.vmap(lambda theta: qdot_at_theta(theta, state, params))(
+        theta_stencil
+    )
+    return jnp.min(qdot_stencil)
 
 
 def qlaw(state: jnp.ndarray, params: QLawParams) -> jnp.ndarray:
@@ -136,8 +111,7 @@ def qlaw(state: jnp.ndarray, params: QLawParams) -> jnp.ndarray:
     u = -G.T @ grad_q
 
     qdot_n = qdot_at_theta(state[-1], state, params)
-    qdot_nn = qdot_nn_gss(state, params)
-    eta_curr = qdot_n / qdot_nn
+    eta_curr = qdot_n / qdot_nn(state, params)
 
     return jax.lax.cond(
         eta_curr < params.eta,
