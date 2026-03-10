@@ -49,7 +49,7 @@ problem_args = (
     (x_guess, u_guess),
     T,
 )
-slsqp_kwargs = {"options": {"maxiter": 1000, "ftol": 1e-9}}
+slsqp_kwargs = {"maxiter": 1000, "ftol": 1e-9}
 
 x_opt, u_opt, res = dense_collocation(
     problem_args, constraint_func=trapezoidal, **slsqp_kwargs

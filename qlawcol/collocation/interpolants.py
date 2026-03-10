@@ -1,5 +1,6 @@
 import jax
 import numpy as np
+from scipy.interpolate import BarycentricInterpolator
 
 from qlawcol.collocation.col_types import Dynamics
 
@@ -106,6 +107,31 @@ def trapezoidal_interpolant(
 
         if x_interp.shape[0] == 1:
             return x_interp[0], u_interp[0]
+        return x_interp, u_interp
+
+    return interpolant
+
+
+def lgl_interpolant(x_opt: np.ndarray, u_opt: np.ndarray, T: float, tau: np.ndarray):
+    """
+    Creates a Lagrange polynomial interpolant for the state and control based on the LGL collocation solution.
+    Control: linear spline
+    State: Lagrange polynomial
+    """
+    t0 = 0
+    tf = T
+
+    state_interpolant = BarycentricInterpolator(tau, x_opt)
+
+    def interpolant(t: float | np.ndarray):
+        tau_eval = (t - t0) / (tf - t0) * 2 - 1  # map t to [-1, 1]
+        x_interp = state_interpolant(tau_eval)
+        u_interp = np.array(
+            [
+                np.interp(t, np.linspace(t0, tf, len(u_opt)), u_opt[:, i])
+                for i in range(u_opt.shape[1])
+            ]
+        ).T
         return x_interp, u_interp
 
     return interpolant
