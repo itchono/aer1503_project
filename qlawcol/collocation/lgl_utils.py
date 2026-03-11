@@ -10,6 +10,8 @@ def lgl_nodes(N: int):
     The LGL nodes are the roots of (1-x^2)*P'_N(x) = 0,
     i.e. the roots of P'_N(x) plus the endpoints -1 and 1.
     """
+    if N == 0:
+        return np.array([-1, 1])
     poly = Legendre.basis(N).deriv()
     roots = poly.roots()
     return np.array([-1, *roots, 1])
@@ -39,3 +41,20 @@ def lgl_differentiation_matrix(N: int, tau: np.ndarray):
     for i in range(N + 1):
         D[i, i] = -np.sum(D[i, :]) + D[i, i]
     return D
+
+
+def hlgl_time_grid(N: int, m: int, T: float):
+    """
+    Computes the time grid for Hermite-LGL collocation by splitting the time horizon [0, T]
+    into m segments and applying the LGL nodes on each segment.
+    """
+    tau = lgl_nodes(N)
+    interval_time = T / m
+    time_grid = []
+    for k in range(m):
+        segment_start = k * interval_time
+        segment_end = (k + 1) * interval_time
+        segment_times = (tau + 1) / 2 * (segment_end - segment_start) + segment_start
+        time_grid.append(segment_times)
+
+    return np.concatenate(time_grid)

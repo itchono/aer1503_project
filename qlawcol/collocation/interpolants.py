@@ -135,3 +135,56 @@ def lgl_interpolant(x_opt: np.ndarray, u_opt: np.ndarray, T: float, tau: np.ndar
         return x_interp, u_interp
 
     return interpolant
+
+
+def hlgl_interpolant(x_opt: np.ndarray, u_opt: np.ndarray, T: float, tau: np.ndarray):
+    """
+    Creates a Lagrange polynomial interpolant for the state and control based on the Hermite-LGL collocation solution.
+    Control: linear spline
+    State: Lagrange polynomial
+
+    x_opt has shape (m, N+1, nx) where m is the number of segments and N+1 is the number of collocation points per segment.
+    """
+
+    # For Hermite-LGL, we have multiple segments. We need to create a piecewise interpolant.
+    # We can use the same BarycentricInterpolator for each segment and then stitch them together.
+    m = x_opt.shape[0]
+    segment_interpolants = []
+
+    for k in range(m):
+        segment_interpolants.append(BarycentricInterpolator(tau, x_opt[k]))
+
+    def interpolant(t: float | np.ndarray):
+        if isinstance(t, float):
+            t = np.array([t])
+
+        # Determine which segment each t belongs to
+        interval_time = T / m
+        segment_indices = np.minimum((t // interval_time).astype(int), m - 1)
+
+        x_interp = np.zeros((len(t), x_opt.shape[2]))
+        u_interp = np.zeros((len(t), u_opt.shape[2]))
+
+        for k in range(m):
+            mask = segment_indices == k
+            if np.any(mask):
+                tau_eval = (t[mask] - k * interval_time) / interval_time * 2 - 1
+                x_interp[mask] = segment_interpolants[k](tau_eval)
+                u_interp[mask] = np.array(
+                    [
+                        np.interp(
+                            t[mask],
+                            np.linspace(
+                                k * interval_time,
+                                (k + 1) * interval_time,
+                                len(u_opt[k]),
+                            ),
+                            u_opt[k][:, i],
+                        )
+                        for i in range(u_opt.shape[2])
+                    ]
+                ).T
+
+        return x_interp, u_interp
+
+    return interpolant
