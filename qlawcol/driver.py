@@ -5,7 +5,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from qlawcol.collocation import hs_interpolant, sparse_collocation
+from qlawcol.collocation import (
+    hlgl_interpolant,
+    hs_interpolant,
+    sparse_collocation,
+)
+from qlawcol.collocation.lgl_utils import lgl_nodes
+from qlawcol.collocation.sparse.sparse_hlgl import sparse_hlgl_collocation
 from qlawcol.dynamics.conversion import keplerian_to_mee, mee_to_keplerian
 from qlawcol.dynamics.gve import gve_mee
 from qlawcol.dynamics.scaling import get_tu
@@ -23,6 +29,7 @@ class ProblemData(NamedTuple):
     ode_maxsteps: int = 4096
     qlaw_tol: float = 1e-2
     col_segments_per_rev: int = 20
+    collocation_options: CollocationOptions = CollocationOptions()
 
 
 class Trajectory(NamedTuple):
@@ -54,6 +61,12 @@ class Result(NamedTuple):
     qlaw: Trajectory
     collocation: Trajectory
     message: str
+
+
+class CollocationOptions(NamedTuple):
+    method: str = "hermite-simpson"
+    m: int = 0  # number of segments for HLGL
+    N: int = 0  # degree of LGL polynomial for HLGL
 
 
 def generate_initial_guess_for_collocation(
@@ -268,11 +281,190 @@ def optimize_transfer(problem_data: ProblemData, **collocation_kwargs) -> Result
     print(f"Q-law solution: {n_revs:.2f} revs, final error {error:.2e}")
 
     # run collocation
-    col_guess, col_params = generate_initial_guess_for_collocation(
-        problem_data, q_solution
-    )
-    col_solution, res = collocate(
-        problem_data, col_guess, col_params, **collocation_kwargs
-    )
+    if problem_data.collocation_options.method == "hermite-simpson":
+        col_guess, col_params = generate_initial_guess_for_collocation(
+            problem_data, q_solution
+        )
+        col_solution, res = collocate(
+            problem_data, col_guess, col_params, **collocation_kwargs
+        )
+    elif problem_data.collocation_options.method == "hlgl":
+        m = problem_data.collocation_options.m
+        N = problem_data.collocation_options.N
+        col_guess, col_params = generate_initial_guess_for_hlgl(
+            problem_data, q_solution, m, N
+        )
+        col_solution, res = collocate_hlgl(
+            problem_data, col_guess, col_params, m, N, **collocation_kwargs
+        )
+    else:
+        raise ValueError(
+            f"Unknown collocation method: {problem_data.collocation_options.method}"
+        )
 
     return Result(q_solution, col_solution, res)
+
+
+def generate_initial_guess_for_hlgl(
+    problem_data: ProblemData, sol_q: Trajectory, m: int, N: int
+) -> tuple[Trajectory, CollocationParams]:
+    """
+    Given a solution from the Q-law, generate an initial guess for HLGL collocation.
+    """
+    T = sol_q.ts[-1]
+
+    LU = problem_data.initial_kep[0]
+    TU = get_tu(LU)
+    MASSU = problem_data.initial_mass
+
+    col_params = CollocationParams(N=N, T=T, LU=LU, TU=TU, MASSU=MASSU)
+
+    # nondimensionalize arrays before interpolation
+    ts_nd = sol_q.ts / TU
+    mee_nd = sol_q.mee / np.array([LU, 1, 1, 1, 1, 1])
+    mass_nd = sol_q.mass / MASSU
+    control_nd = sol_q.control / (LU / TU**2)
+
+    # stack arrays for interpolation
+    f_stacked = np.hstack((mee_nd, mass_nd[:, None], control_nd))
+
+    # create time grid for HLGL
+    tau = lgl_nodes(N)
+    ts_col = np.concatenate([(T / m) * (k + (tau + 1) / 2) for k in range(m)]) / TU
+
+    f_guess = np.array(
+        [np.interp(ts_col, ts_nd, f_stacked[:, i]) for i in range(f_stacked.shape[1])]
+    ).T
+
+    # unstack interpolated arrays
+    mee_guess = f_guess[:, :6].reshape(m, N + 1, 6)
+    mass_guess = f_guess[:, 6].reshape(m, N + 1, 1)
+    control_guess = f_guess[:, 7:].reshape(m, N + 1, 3)
+
+    # change control arrays to required format (throttle + direction)
+    thrust_max_nd = problem_data.thrust / (MASSU * LU / TU**2)
+    thrust_guess = np.linalg.norm(control_guess, axis=2) * mass_guess.squeeze()
+    throttle_guess = thrust_guess / thrust_max_nd
+    alpha_guess = np.arctan2(control_guess[:, :, 0], control_guess[:, :, 1])
+    beta_guess = np.arctan2(
+        control_guess[:, :, 2],
+        np.linalg.norm(control_guess[:, :, :2], axis=2),
+    )
+    control_guess = np.stack((throttle_guess, alpha_guess, beta_guess), axis=2)
+
+    traj_guess_nd = Trajectory(
+        ts=ts_col, mee=mee_guess, mass=mass_guess, control=control_guess
+    )
+    return traj_guess_nd, col_params
+
+
+def collocate_hlgl(
+    problem_data: ProblemData,
+    col_guess: Trajectory,
+    col_params: CollocationParams,
+    m: int,
+    N: int,
+    **collocation_kwargs,
+) -> tuple[Trajectory, str]:
+    """
+    Take an initial guess for collocation and run the optimization using HLGL,
+    returning the optimized trajectory.
+    """
+    initial_mee = keplerian_to_mee(problem_data.initial_kep)
+
+    _, T, LU, TU, MASSU = col_params
+    thrust_nd = problem_data.thrust / (MASSU * LU / TU**2)
+    vex_nd = problem_data.exhaust_velocity / (LU / TU)
+    tau = lgl_nodes(N)
+
+    def f(x: np.ndarray, u: np.ndarray):
+        """
+        Collocation variables
+        x: (7,) array of state values at a node (6 orbital elements + mass)
+        u: (3,) array of throttle and direction at a node
+        """
+        mee, mass = x[:6], x[6]
+        throttle, alpha, beta = u
+        thrust_mag = throttle * thrust_nd
+        direction = jnp.array(
+            [
+                jnp.cos(beta) * jnp.sin(alpha),
+                jnp.cos(beta) * jnp.cos(alpha),
+                jnp.sin(beta),
+            ]
+        )
+        thrust_vec = thrust_mag * direction
+        accel_vec = thrust_vec / mass
+        A, b = gve_mee(mee)
+        mee_dot = A @ accel_vec + b
+        mass_dot = -thrust_mag / vex_nd
+        return jnp.array([*mee_dot, mass_dot])
+
+    def objective(x: np.ndarray, u: np.ndarray):
+        # maximize final mass
+        return -x[-1, -1, 6]
+
+    def constraints(x: np.ndarray) -> np.ndarray:
+        # enforce BCs on state
+        ic_constraints = jnp.array(
+            [
+                x[0, 0, 0] - initial_mee[0] / LU,  # a(0) = a0
+                x[0, 0, 1] - initial_mee[1],  # f(0) = f0
+                x[0, 0, 2] - initial_mee[2],  # g(0) = g0
+                x[0, 0, 3] - initial_mee[3],  # h(0) = h0
+                x[0, 0, 4] - initial_mee[4],  # k(0) = k0
+                x[0, 0, 5] - initial_mee[5],  # L(0) = L0
+                x[0, 0, 6] - 1,  # m(0) = m0
+            ]
+        )
+
+        terminal_kep_state = mee_to_keplerian(x[-1, -1, :6])
+
+        with jax.ensure_compile_time_eval():
+            # add terminal constraints only if Q-law controls for them
+            target_kep_nd = problem_data.qlaw_params.target / jnp.array(
+                [LU, 1, 1, 1, 1]
+            )
+            w_qlaw = problem_data.qlaw_params.w_oe
+            extras_list = []
+            for i, w in enumerate(w_qlaw):
+                if w > 0:
+                    extras_list.append(target_kep_nd[i] - terminal_kep_state[i])
+
+        return jnp.concatenate((ic_constraints, jnp.array(extras_list)))
+
+    state_guess = np.dstack((col_guess.mee, col_guess.mass))
+    problem_args = (f, objective, constraints, (state_guess, col_guess.control), T / TU)
+
+    print(f"HLGL Collocation will use {m} segments and {N + 1} nodes per segment.")
+    print(f"Initial objective value: {objective(state_guess, col_guess.control):.4e}")
+
+    x_opt, u_opt, res = sparse_hlgl_collocation(
+        problem_args, m, N, **collocation_kwargs
+    )
+
+    collocation_interpolant = hlgl_interpolant(x_opt, u_opt, T / TU, tau)
+    t_interp = np.linspace(0, T / TU, m * N * 10)
+    x_hist, u_hist = collocation_interpolant(t_interp)
+    ts_col = t_interp * TU
+
+    # convert to dimensional units
+    mass_col = x_hist[:, 6] * MASSU
+    mee_col = np.array(x_hist[:, :6])
+    mee_col[:, 0] *= LU  # convert SMA back to dimensional units
+    throttle_col = u_hist[:, 0]
+    alpha = u_hist[:, 1]
+    beta = u_hist[:, 2]
+    direction_col = np.column_stack(
+        (np.cos(beta) * np.sin(alpha), np.cos(beta) * np.cos(alpha), np.sin(beta))
+    )
+
+    control_col = (
+        throttle_col[:, None]
+        * direction_col
+        * thrust_nd
+        / x_hist[:, 6][:, None]
+        * (LU / TU**2)
+    )
+
+    return Trajectory(ts=ts_col, mee=mee_col, mass=mass_col, control=control_col), res
