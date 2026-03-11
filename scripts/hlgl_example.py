@@ -4,10 +4,11 @@ import numpy as np
 from qlawcol.collocation.dense import hlgl_collocation
 from qlawcol.collocation.interpolants import hlgl_interpolant
 from qlawcol.collocation.lgl_utils import lgl_nodes, lgl_weights
+from qlawcol.collocation.sparse.sparse_hlgl import sparse_hlgl_collocation
 
 T = 1.0  # final time
-N = 3  # number of intervals
-m = 10  # number of segments for Hermite-LGL collocation
+N = 5  # degree of LGL polynomial (number of nodes - 1)
+m = 5  # number of segments for Hermite-LGL collocation
 
 tau = lgl_nodes(N)
 w = lgl_weights(N, tau)
@@ -57,10 +58,8 @@ problem_args = (
 )
 
 
-x_opt, u_opt, res = hlgl_collocation(problem_args, m, N)
+x_opt, u_opt, res = sparse_hlgl_collocation(problem_args, m, N)
 
-print("Success:", res.success)
-print("Cost:", res.fun)
 print(res)
 
 interpolant = hlgl_interpolant(x_opt, u_opt, T, tau)
