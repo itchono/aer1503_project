@@ -19,6 +19,11 @@ from qlawcol.qlaw.control import QLawParams
 from qlawcol.qlaw.sim import ODEArgs, simulate
 
 
+class CollocationOptions(NamedTuple):
+    method: str = "hermite-simpson"
+    N: int = 0  # degree of LGL polynomial for HLGL
+
+
 class ProblemData(NamedTuple):
     initial_kep: np.ndarray
     initial_mass: float
@@ -50,7 +55,7 @@ class Trajectory(NamedTuple):
 
 
 class CollocationParams(NamedTuple):
-    N: int
+    segments: int
     T: float
     LU: float
     TU: float
@@ -61,12 +66,6 @@ class Result(NamedTuple):
     qlaw: Trajectory
     collocation: Trajectory
     message: str
-
-
-class CollocationOptions(NamedTuple):
-    method: str = "hermite-simpson"
-    m: int = 0  # number of segments for HLGL
-    N: int = 0  # degree of LGL polynomial for HLGL
 
 
 def generate_initial_guess_for_collocation(
@@ -84,7 +83,7 @@ def generate_initial_guess_for_collocation(
     TU = get_tu(LU)
     MASSU = problem_data.initial_mass
 
-    col_params = CollocationParams(N=N, T=T, LU=LU, TU=TU, MASSU=MASSU)
+    col_params = CollocationParams(segments=N, T=T, LU=LU, TU=TU, MASSU=MASSU)
 
     # nondimensionalize arrays before interpolation
     ts_nd = sol_q.ts / TU
@@ -289,13 +288,11 @@ def optimize_transfer(problem_data: ProblemData, **collocation_kwargs) -> Result
             problem_data, col_guess, col_params, **collocation_kwargs
         )
     elif problem_data.collocation_options.method == "hlgl":
-        m = problem_data.collocation_options.m
-        N = problem_data.collocation_options.N
         col_guess, col_params = generate_initial_guess_for_hlgl(
-            problem_data, q_solution, m, N
+            problem_data, q_solution
         )
         col_solution, res = collocate_hlgl(
-            problem_data, col_guess, col_params, m, N, **collocation_kwargs
+            problem_data, col_guess, col_params, **collocation_kwargs
         )
     else:
         raise ValueError(
@@ -306,18 +303,21 @@ def optimize_transfer(problem_data: ProblemData, **collocation_kwargs) -> Result
 
 
 def generate_initial_guess_for_hlgl(
-    problem_data: ProblemData, sol_q: Trajectory, m: int, N: int
+    problem_data: ProblemData, sol_q: Trajectory
 ) -> tuple[Trajectory, CollocationParams]:
     """
     Given a solution from the Q-law, generate an initial guess for HLGL collocation.
     """
     T = sol_q.ts[-1]
+    n_revs = max(sol_q.mee[:, 5]) / (2 * np.pi)
+    m = int(np.ceil(n_revs * problem_data.col_segments_per_rev))
+    N = problem_data.collocation_options.N
 
     LU = problem_data.initial_kep[0]
     TU = get_tu(LU)
     MASSU = problem_data.initial_mass
 
-    col_params = CollocationParams(N=N, T=T, LU=LU, TU=TU, MASSU=MASSU)
+    col_params = CollocationParams(segments=m, T=T, LU=LU, TU=TU, MASSU=MASSU)
 
     # nondimensionalize arrays before interpolation
     ts_nd = sol_q.ts / TU
@@ -362,8 +362,6 @@ def collocate_hlgl(
     problem_data: ProblemData,
     col_guess: Trajectory,
     col_params: CollocationParams,
-    m: int,
-    N: int,
     **collocation_kwargs,
 ) -> tuple[Trajectory, str]:
     """
@@ -372,7 +370,9 @@ def collocate_hlgl(
     """
     initial_mee = keplerian_to_mee(problem_data.initial_kep)
 
-    _, T, LU, TU, MASSU = col_params
+    N = problem_data.collocation_options.N
+
+    m, T, LU, TU, MASSU = col_params
     thrust_nd = problem_data.thrust / (MASSU * LU / TU**2)
     vex_nd = problem_data.exhaust_velocity / (LU / TU)
     tau = lgl_nodes(N)
@@ -436,7 +436,9 @@ def collocate_hlgl(
     state_guess = np.dstack((col_guess.mee, col_guess.mass))
     problem_args = (f, objective, constraints, (state_guess, col_guess.control), T / TU)
 
-    print(f"HLGL Collocation will use {m} segments and {N + 1} nodes per segment.")
+    print(
+        f"HLGL Collocation will use {m} segments and {N + 1} nodes per segment for {m * (N + 1) * 10} total variables."
+    )
     print(f"Initial objective value: {objective(state_guess, col_guess.control):.4e}")
 
     x_opt, u_opt, res = sparse_hlgl_collocation(

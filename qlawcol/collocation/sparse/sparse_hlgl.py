@@ -36,7 +36,6 @@ def sparse_hlgl_collocation(
     len_x_seg = (N + 1) * nx
     len_u_seg = (N + 1) * nu
     n_collocation_constr_seg = (N + 1) * nx
-    n_continuity_constr_seg = nx + nu
     n_additional_constr = constraints(x_guess).shape[0]
 
     # --- Constraint and Objective Functions ---
