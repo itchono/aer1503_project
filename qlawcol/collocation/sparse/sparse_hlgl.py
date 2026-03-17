@@ -161,13 +161,49 @@ def sparse_hlgl_collocation(
     # --- pyOptSparse Problem Setup ---
     opt_prob = pyoptsparse.Optimization("sparse-hlgl-collocation", objective_and_cons)
 
+    # apply same bounds as low order collocation
+    if u_guess.shape[2] == 3:
+        print("Applying control bounds.")
+
+        # bound state
+        a_lb = np.zeros(x_guess.shape[1])  # SMA must be positive
+        a_ub = (
+            np.ones(x_guess.shape[1]) * 20
+        )  # some large number to effectively have no upper bound on SMA
+        f_lb = np.ones(x_guess.shape[1]) * -0.99  # f can be in [-1, 1]
+        f_ub = np.ones(x_guess.shape[1]) * 0.99
+        g_lb = np.ones(x_guess.shape[1]) * -0.99  # g can be in [-1, 1]
+        g_ub = np.ones(x_guess.shape[1]) * 0.99
+        h_lb = np.ones(x_guess.shape[1]) * -10
+        h_ub = (
+            np.ones(x_guess.shape[1]) * 10
+        )  # h can be large, but we set some bounds to help optimization
+        k_lb = np.ones(x_guess.shape[1]) * -10
+        k_ub = (
+            np.ones(x_guess.shape[1]) * 10
+        )  # k can be large, but we set some bounds to help optimization
+        L_lb = np.ones(x_guess.shape[1]) * -np.inf
+        L_ub = np.ones(x_guess.shape[1]) * np.inf
+        mass_lb = np.zeros(x_guess.shape[1])  # mass must be positive
+        mass_ub = np.ones(x_guess.shape[1]) * 1  # mass cannot exceed initial mass
+
+        x_lb = np.column_stack((a_lb, f_lb, g_lb, h_lb, k_lb, L_lb, mass_lb)).flatten()
+        x_ub = np.column_stack((a_ub, f_ub, g_ub, h_ub, k_ub, L_ub, mass_ub)).flatten()
+
+        u_lb0 = np.zeros(u_guess.shape[1])
+        u_ub0 = np.ones(u_guess.shape[1]) * 1.0  # assume max throttle is 1.0
+        u_lb12 = np.ones(u_guess.shape[1]) * -np.pi
+        u_ub12 = np.ones(u_guess.shape[1]) * np.pi
+        u_lb = np.column_stack((u_lb0, u_lb12, u_lb12)).flatten()
+        u_ub = np.column_stack((u_ub0, u_ub12, u_ub12)).flatten()
+
     # Add variables (state and control for each segment)
     for k in range(m):
         opt_prob.addVarGroup(
-            f"x_{k}", len_x_seg, value=x_guess[k].flatten(), lower=-np.inf, upper=np.inf
+            f"x_{k}", len_x_seg, value=x_guess[k].flatten(), lower=x_lb, upper=x_ub
         )
         opt_prob.addVarGroup(
-            f"u_{k}", len_u_seg, value=u_guess[k].flatten(), lower=-np.inf, upper=np.inf
+            f"u_{k}", len_u_seg, value=u_guess[k].flatten(), lower=u_lb, upper=u_ub
         )
 
     # Add constraints
@@ -204,7 +240,7 @@ def sparse_hlgl_collocation(
         n_additional_constr,
         lower=0,
         upper=0,
-        wrt=[f"x_0", f"x_{m - 1}"],
+        wrt=["x_0", f"x_{m - 1}"],
     )
 
     # Add objective
