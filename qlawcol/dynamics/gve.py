@@ -1,6 +1,10 @@
 import jax.numpy as jnp
 from jax.numpy import cos, sin, sqrt
 
+from .scaling import R_EARTH
+
+J2_EARTH = 1.08263e-3
+
 
 def gve_2d_mee(mee: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
     """
@@ -162,3 +166,39 @@ def gve_kep(state: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
     b = jnp.array([0, 0, 0, 0, 0, h / r**2])
 
     return A, b
+
+
+def mee_j2_lvlh(y: jnp.ndarray) -> jnp.ndarray:
+    """
+    J2 perturbation, assuming LU = R_EARTH!
+
+    Parameters
+    ----------
+    y : jax.Array
+        MEE state
+
+    Returns
+    -------
+    acc_lvlh : jax.Array
+        Acceleration vector (m/s^2) in LVLH frame.
+
+    """
+    a, f, g, h, k, L = y
+
+    p = a * (1 - f**2 - g**2)
+
+    q = 1 + f * cos(L) + g * sin(L)
+
+    r = p / q
+
+    denominator = (1 + h**2 + k**2) ** 2
+
+    prefactor = -J2_EARTH / r**4
+
+    return prefactor * jnp.array(
+        [
+            3 / 2 * (1 - 12 * (h * sin(L) - k * cos(L)) ** 2 / denominator),
+            12 * (h * sin(L) - k * cos(L)) * (h * cos(L) + k * sin(L)) / denominator,
+            6 * (1 - h**2 - k**2) * (h * sin(L) - k * cos(L)) / denominator,
+        ],
+    )

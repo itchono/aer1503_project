@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from qlawcol.dynamics.conversion import mee_to_keplerian
-from qlawcol.dynamics.gve import gve_mee
+from qlawcol.dynamics.gve import gve_mee, mee_j2_lvlh
 from qlawcol.dynamics.scaling import R_EARTH, get_tu
 from qlawcol.qlaw.control import QLawParams, qlaw
 
@@ -37,7 +37,7 @@ def sim_control(state: ODEState, args: ODEArgs) -> jnp.ndarray:
     return u / (jnp.linalg.norm(u) + 1e-12) * args.thrust / state.mass
 
 
-def sim_ode(t: float, state: ODEState, args: ODEArgs) -> ODEState:
+def sim_ode(t: float, state: ODEState, args: ODEArgs, use_j2: bool = False) -> ODEState:
     """ODE function for simulating the spacecraft state."""
     # unpack state
     mee, mass = state
@@ -50,6 +50,9 @@ def sim_ode(t: float, state: ODEState, args: ODEArgs) -> ODEState:
 
     # compute MEE derivatives
     mee_dot = A @ u + b
+
+    if use_j2:
+        mee_dot = mee_dot + A @ mee_j2_lvlh(mee)
 
     # compute mass derivative
     accel_mag = jnp.linalg.norm(u)
@@ -84,13 +87,14 @@ def crashed_into_earth(_, state: ODEState, _args, **kwargs) -> bool:
     return r < 1.0  # in nondimensional units, Earth radius is 1.0
 
 
-@jax.jit(static_argnames=["args", "t_max", "max_steps"])
+@jax.jit(static_argnames=["args", "t_max", "max_steps", "use_j2"])
 def simulate(
     initial_mee: jnp.ndarray,
     initial_mass: float,
     args: ODEArgs,
     t_max: float,
     max_steps: int = 4096,
+    use_j2: bool = False,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, int]:
     """Simulate the spacecraft trajectory under the Q-law."""
 
@@ -129,7 +133,7 @@ def simulate(
 
     controller = dfx.PIDController(rtol=1e-6, atol=1e-6)
     saveat = dfx.SaveAt(t0=True, steps=True)
-    term = dfx.ODETerm(lambda t, y, _: sim_ode(t, y, args))
+    term = dfx.ODETerm(lambda t, y, _: sim_ode(t, y, args, use_j2=use_j2))
     solver = dfx.Tsit5()
 
     # monkeypatch _assert_term_compatible to no-op (save compile time)

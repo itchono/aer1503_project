@@ -35,6 +35,7 @@ class ProblemData(NamedTuple):
     qlaw_tol: float = 1e-2
     col_segments_per_rev: int = 20
     collocation_options: CollocationOptions = CollocationOptions()
+    j2: bool = False
 
 
 class Trajectory(NamedTuple):
@@ -253,6 +254,7 @@ def optimize_transfer(problem_data: ProblemData, **collocation_kwargs) -> Result
         ode_args,
         t_max=problem_data.t_max,
         max_steps=problem_data.ode_maxsteps,
+        use_j2=problem_data.j2,
     )
     # filter out any NaN values (in case of failure modes)
     valid_indices = np.where(np.isfinite(ts_q))

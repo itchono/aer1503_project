@@ -1,30 +1,27 @@
 import numpy as np
 from matplotlib import pyplot as plt
-from qlawcol.driver import CollocationOptions, ProblemData, optimize_transfer
+from qlawcol.driver import ProblemData, optimize_transfer
 from qlawcol.postprocess import plot_results
 from qlawcol.qlaw.control import QLawParams
 
 problem_data = ProblemData(
-    initial_kep=np.array([7000e3, 0.01, np.radians(0.01), 0, 0, 0]),
-    initial_mass=300.0,
+    initial_kep=np.array([24505.9e3, 0.725, np.radians(0.06), 0, 0, 0]),
+    initial_mass=2000.0,
     qlaw_params=QLawParams(
-        target=np.array([42000e3, 0.01, np.radians(0.01), 0, 0]),
-        w_oe=np.array([1.0, 1.0, 0.0, 0.0, 0.0]),
+        target=np.array([26500e3, 0.7, np.radians(116), 0, 0]),
+        w_oe=np.array([1.0, 1.0, 1.0, 0.0, 0.0]),
         eta=0.1,
+        w_pen=1,
     ),
-    t_max=100 * 86400,
-    thrust=5,
-    exhaust_velocity=3000 * 9.81,
+    t_max=200 * 86400,
+    thrust=2,
+    exhaust_velocity=2000 * 9.81,
     ode_maxsteps=32768,
-    qlaw_tol=5e-3,
-    col_segments_per_rev=10,
-    collocation_options=CollocationOptions(
-        method="hlgl",
-        N=5,
-    ),
+    col_segments_per_rev=12,
+    qlaw_tol=6e-2,
 )
-casename = "case_a_hlgl"
-res = optimize_transfer(problem_data, max_iter=5000)
+casename = "case_e"
+res = optimize_transfer(problem_data, max_iter=1000)
 
 # save solution to file
 col_sol = res.collocation

@@ -72,7 +72,7 @@ plt.xlabel("Time (days)")
 plt.ylabel("Semi-major Axis (km)")
 plt.subplot(2, 1, 2)
 plt.plot(ts / 86400, kep[:, 1])
-plt.axhline(target_orbit[1] * 1e-3, color="r", linestyle="--")
+plt.axhline(target_orbit[1], color="r", linestyle="--")
 plt.xlabel("Time (days)")
 plt.ylabel("Eccentricity")
 
