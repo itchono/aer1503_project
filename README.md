@@ -2,6 +2,8 @@
 
 This repository contains the source code for my AER1503 project, "Energy-optimal Low-thrust Many-revolution Elliptical Orbit Transfers Using Feedback Laws for an Initial Trajectory Guess".
 
+[See the final report here!](https://github.com/user-attachments/files/26318328/aer1503_final_mdy.pdf)
+
 ## Installation
 
 ### Python Package
