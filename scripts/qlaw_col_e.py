@@ -14,14 +14,15 @@ problem_data = ProblemData(
         w_pen=1,
     ),
     t_max=200 * 86400,
-    thrust=2,
+    thrust=10,
     exhaust_velocity=2000 * 9.81,
     ode_maxsteps=32768,
-    col_segments_per_rev=12,
+    col_segments_per_rev=30,
     qlaw_tol=6e-2,
+    j2=True
 )
-casename = "case_e"
-res = optimize_transfer(problem_data, max_iter=1000)
+casename = "case_e_j2"
+res = optimize_transfer(problem_data, max_iter=300)
 
 # save solution to file
 col_sol = res.collocation
