@@ -47,13 +47,19 @@ def ipopt_pbar_from_file(
                 parts = line.split()
                 if not parts:
                     continue
-                if not parts[0].strip().isdigit():
+                if not (parts[0].strip().isdigit() or parts[0].split("r")[0].isdigit()):
                     continue
 
                 try:
-                    iter_num = int(parts[0])
-                    obj = float(parts[1])
-                    constr_violation = float(parts[2])
+                    in_restoration = "r" in parts[0]
+                    if in_restoration:
+                        iter_num = int(parts[0].split("r")[0])
+                        obj = float(parts[0].split("r")[1])
+                        constr_violation = float(parts[1])
+                    else:
+                        iter_num = int(parts[0])
+                        obj = float(parts[1])
+                        constr_violation = float(parts[2])
                     steptype = parts[-2][-1]  # last character of second to last column
                     pbar.n = iter_num
                     pbar.set_postfix(

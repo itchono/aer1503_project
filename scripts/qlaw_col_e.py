@@ -17,11 +17,12 @@ problem_data = ProblemData(
         w_pen=1,
     ),
     t_max=200 * 86400,
-    thrust=2,
+    thrust=10,
     exhaust_velocity=2000 * 9.81,
     ode_maxsteps=32768,
-    col_segments_per_rev=20,
+    col_segments_per_rev=30,
     qlaw_tol=6e-2,
+    j2=True,
 )
 casename = "case_e_j2"
 # check if we passed in a folder with existing result. if so, bypass optimization and just load the results
