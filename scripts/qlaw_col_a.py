@@ -1,6 +1,9 @@
+import sys
+from pathlib import Path
+
 import numpy as np
 from matplotlib import pyplot as plt
-from qlawcol.driver import ProblemData, optimize_transfer
+from qlawcol.driver import ProblemData, Trajectory, optimize_transfer
 from qlawcol.postprocess import plot_results
 from qlawcol.qlaw.control import QLawParams
 
@@ -20,13 +23,23 @@ problem_data = ProblemData(
     qlaw_tol=5e-3,
 )
 casename = "case_a"
-res = optimize_transfer(problem_data, max_iter=1000)
 
-# save solution to file
-col_sol = res.collocation
-qlaw_sol = res.qlaw
-col_sol.dump_to_file(f"col_sol_{casename}.npz")
-qlaw_sol.dump_to_file(f"qlaw_sol_{casename}.npz")
+# check if we passed in a folder with existing result. if so, bypass optimization and just load the results
+if len(sys.argv) > 1:
+    folder = Path(sys.argv[1])
+
+    print(f"Loading results from folder: {folder}")
+    col_sol = Trajectory.load_from_file(folder / f"col_sol_{casename}.npz")
+    qlaw_sol = Trajectory.load_from_file(folder / f"qlaw_sol_{casename}.npz")
+
+else:
+    res = optimize_transfer(problem_data, max_iter=1000)
+
+    # save solution to file
+    col_sol = res.collocation
+    qlaw_sol = res.qlaw
+    col_sol.dump_to_file(f"col_sol_{casename}.npz")
+    qlaw_sol.dump_to_file(f"qlaw_sol_{casename}.npz")
 
 # report delta-v
 dv_col = np.log(col_sol.mass[0] / col_sol.mass[-1]) * problem_data.exhaust_velocity
